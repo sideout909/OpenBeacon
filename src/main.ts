@@ -1,3 +1,14 @@
+import { feature as topoFeature } from "topojson-client";
+import type { Topology } from "topojson-specification";
+import countriesData from "./data/maps/countries.json";
+import statesData from "./data/maps/us-states.json";
+import {
+  temperature as formatTemp,
+  speedKnots,
+  kmToMiles,
+  milesToKm,
+  type Units,
+} from "./units";
 import { identifyDevice } from "./device-id";
 import { addBasemap, removeBasemap, updateMapColors } from "./basemap";
 import { appShell } from "./shell";
@@ -18,6 +29,66 @@ function startApp() {
   document.querySelector<HTMLDivElement>("#app")!.innerHTML = appShell;
   const el = <T extends HTMLElement = HTMLElement>(id: string): T =>
     document.getElementById(id) as T;
+  document.querySelectorAll<HTMLDialogElement>("dialog").forEach((dialog) => {
+    dialog.addEventListener("click", (event) => {
+      if (event.target !== dialog) return;
+      const box = dialog.getBoundingClientRect();
+      if (
+        event.clientX < box.left ||
+        event.clientX > box.right ||
+        event.clientY < box.top ||
+        event.clientY > box.bottom
+      )
+        dialog.close();
+    });
+  });
+  let units: Units =
+    localStorage.getItem("openbeacon-units") === "metric"
+      ? "metric"
+      : "imperial";
+  const unitsChoice = el<HTMLSelectElement>("units-choice");
+  unitsChoice.value = units;
+  const radiusInput = el<HTMLInputElement>("radius");
+  function setRadius(km: number) {
+    radiusInput.value = String(
+      units === "metric" ? km : Number(kmToMiles(km).toFixed(1)),
+    );
+  }
+  function radiusKm() {
+    return Math.round(
+      units === "metric"
+        ? Number(radiusInput.value)
+        : milesToKm(Number(radiusInput.value)),
+    );
+  }
+  function updateRadiusUnits() {
+    el("radius-label").textContent =
+      `Radius (${units === "metric" ? "km" : "mi"})`;
+    radiusInput.min = units === "metric" ? "1" : "0.7";
+    radiusInput.max = units === "metric" ? "2000" : "1242.7";
+    radiusInput.step = units === "metric" ? "1" : "0.1";
+  }
+  updateRadiusUnits();
+  setRadius(100);
+  unitsChoice.onchange = () => {
+    const km = radiusKm();
+    units = unitsChoice.value === "metric" ? "metric" : "imperial";
+    localStorage.setItem("openbeacon-units", units);
+    updateRadiusUnits();
+    setRadius(km);
+    updateDetails();
+    if (!el("weather-panel").hidden) {
+      renderWeatherStations();
+      void refreshForecast();
+    }
+    if (packetDialog.open && inspectedPacket)
+      showPacket(
+        packetDialog,
+        el("packet-detail-content"),
+        inspectedPacket,
+        units,
+      );
+  };
   const systemTheme = matchMedia("(prefers-color-scheme: dark)");
   let theme: Theme = "system";
   const isDark = () =>
@@ -206,8 +277,11 @@ function startApp() {
   let monitorWhilePaused = 0;
   const packetDialog = el<HTMLDialogElement>("packet-dialog");
   el("close-packet").onclick = () => packetDialog.close();
-  const inspectPacket = (packet: DecodedPacket) =>
-    showPacket(packetDialog, el("packet-detail-content"), packet);
+  let inspectedPacket: DecodedPacket | null = null;
+  const inspectPacket = (packet: DecodedPacket) => {
+    inspectedPacket = packet;
+    showPacket(packetDialog, el("packet-detail-content"), packet, units);
+  };
   let symbolSheets: HTMLImageElement[] | null = null;
   const missingSymbols = new Set<string>();
   function stationIcon(symbol: string): string | null {
@@ -374,6 +448,22 @@ function startApp() {
     const s = stations.get(selected);
     if (!s) return;
     el("station-name").textContent = s.callsign;
+    const icon = el("station-detail-icon");
+    const cells = symbolCells(s.symbol);
+    icon.replaceChildren();
+    icon.setAttribute("aria-label", `Station symbol ${s.symbol}`);
+    if (cells) {
+      for (const [table, index] of [
+        [cells.table, cells.index],
+        ...(cells.overlay === undefined ? [] : [[2, cells.overlay]]),
+      ]) {
+        const sprite = document.createElement("span");
+        sprite.className = "station-detail-sprite";
+        sprite.style.backgroundImage = `url("${new URL(`aprs-symbols/table-${table}.png`, document.baseURI).href}")`;
+        sprite.style.backgroundPosition = `-${(index % 16) * 48}px -${Math.floor(index / 16) * 48}px`;
+        icon.append(sprite);
+      }
+    } else icon.textContent = "•";
     const fields: [string, string][] = [
       ["Source", sourceLabel(s.source)],
       [
@@ -390,14 +480,14 @@ function startApp() {
           ? `Approximate · ${s.ambiguity} ambiguous digits`
           : "As reported",
       ],
-      ["Speed", s.speedKnots == null ? "—" : `${s.speedKnots} kt`],
+      ["Speed", s.speedKnots == null ? "—" : speedKnots(s.speedKnots, units)],
       ["Course", s.courseDegrees == null ? "—" : `${s.courseDegrees}°`],
       ["Comment", s.comment || "—"],
       [
         "Temperature",
         s.weather?.temperatureFahrenheit == null
           ? "—"
-          : `${s.weather.temperatureFahrenheit} °F`,
+          : formatTemp(s.weather.temperatureFahrenheit, units),
       ],
       [
         "Humidity",
@@ -474,7 +564,6 @@ function startApp() {
     el("details").hidden = false;
     updateDetails();
     renderStations();
-    map.resize();
   }
   function showStations(show: boolean) {
     el("messages-panel").hidden = true;
@@ -490,6 +579,268 @@ function startApp() {
     map.resize();
     if (show) el<HTMLInputElement>("station-search").focus();
   }
+  type SentMessage = {
+    from: string;
+    to: string;
+    text: string;
+    id: string;
+    route: string;
+    path: string;
+    at: number;
+    state: "sending" | "pending" | "acknowledged" | "rejected" | "error";
+    detail?: string;
+  };
+  let outbox: SentMessage[] = (() => {
+    try {
+      const items = JSON.parse(
+        localStorage.getItem("openbeacon-outbox") || "[]",
+      );
+      return Array.isArray(items)
+        ? items
+            .slice(0, 200)
+            .map((x: SentMessage) =>
+              x.state === "sending" ? { ...x, state: "pending" } : x,
+            )
+        : [];
+    } catch {
+      return [];
+    }
+  })();
+  const messageRoute = el<HTMLSelectElement>("message-route");
+  const messagePath = el<HTMLSelectElement>("message-rf-path");
+  messageRoute.onchange = () => {
+    el("message-rf-options").hidden = messageRoute.value !== "rf";
+  };
+  function selectedMessagePath() {
+    return messagePath.value === "station"
+      ? savedRfPath
+      : messagePath.value === "direct"
+        ? ""
+        : messagePath.value;
+  }
+  const autoAck = el<HTMLInputElement>("message-auto-ack");
+  const lastAck = new Map<string, number>();
+  autoAck.onchange = () => {
+    if (!autoAck.checked) lastAck.clear();
+  };
+  type MessageAlert = {
+    packet: DecodedPacket;
+    key: string;
+    state: "ready" | "sending" | "sent" | "error";
+    error?: string;
+  };
+  const incomingDialog = el<HTMLDialogElement>("incoming-alert");
+  const alerts: MessageAlert[] = [];
+  function messageCanAck(packet: DecodedPacket) {
+    return (
+      !!packet.message?.id &&
+      /^[A-Za-z0-9]{1,5}$/.test(packet.message.id) &&
+      /^[A-Z0-9]{3,6}(?:-(?:[0-9]|1[0-5]))?$/.test(
+        packet.source.toUpperCase(),
+      ) &&
+      (packet.origin === "rf" || packet.origin === "aprs-is")
+    );
+  }
+  function renderIncomingAlert() {
+    const alert = alerts[0];
+    if (!alert) {
+      if (incomingDialog.open) incomingDialog.close();
+      return;
+    }
+    const packet = alert.packet,
+      msg = packet.message!;
+    el("incoming-alert-from").textContent =
+      `From ${packet.source} to ${msg.addressee} · ${sourceLabel(packet.origin)}${msg.id ? ` · ID ${msg.id}` : ""}`;
+    el("incoming-alert-message").textContent = msg.text;
+    el("incoming-alert-count").textContent =
+      alerts.length > 1 ? `${alerts.length} waiting` : "";
+    el("incoming-alert-status").textContent =
+      alert.state === "sent"
+        ? "Acknowledgement written to the selected route."
+        : alert.state === "sending"
+          ? "Sending acknowledgement…"
+          : alert.state === "error"
+            ? `Acknowledgement failed: ${alert.error}`
+            : messageCanAck(packet)
+              ? `Send an acknowledgement via ${packet.origin === "rf" ? `RF (${savedRfPath || "direct"})` : "APRS-IS"} so the sender knows this message was received.`
+              : "This message does not have a supported acknowledgement ID.";
+    const button = el<HTMLButtonElement>("incoming-send-ack");
+    button.hidden = !messageCanAck(packet);
+    button.disabled = alert.state === "sending" || alert.state === "sent";
+    button.textContent =
+      alert.state === "error"
+        ? "Retry acknowledgement"
+        : "Send acknowledgement";
+    if (!incomingDialog.open) incomingDialog.showModal();
+  }
+  function enqueueMessageAlert(packet: DecodedPacket): MessageAlert {
+    const msg = packet.message!;
+    const key = `${packet.source.toUpperCase()}:${msg.addressee.toUpperCase()}:${msg.id || packet.raw}:${msg.text}`;
+    const existing = alerts.find((item) => item.key === key);
+    if (existing) return existing;
+    const alert: MessageAlert = { packet, key, state: "ready" };
+    alerts.push(alert);
+    if (alerts.length > 50) alerts.splice(1, 1);
+    renderIncomingAlert();
+    return alert;
+  }
+  async function acknowledgeMessage(packet: DecodedPacket) {
+    if (!messageCanAck(packet) || !packet.message?.id)
+      throw new Error("No valid acknowledgement ID or route.");
+    if (packet.message.addressee.toUpperCase() !== savedCallsign.toUpperCase())
+      throw new Error(
+        "The station identity has changed; select the addressed callsign in My Station.",
+      );
+    return desktop.sendAprsMessage(
+      savedCallsign,
+      packet.source.toUpperCase(),
+      "",
+      packet.message.id,
+      true,
+      packet.origin === "rf" ? "rf" : "ip",
+      savedRfPath,
+    );
+  }
+  async function sendAlertAck(alert: MessageAlert) {
+    if (alert.state === "sending" || alert.state === "sent") return;
+    alert.state = "sending";
+    renderIncomingAlert();
+    try {
+      const raw = await acknowledgeMessage(alert.packet);
+      showSentPacket(raw);
+      alert.state = "sent";
+    } catch (error) {
+      alert.state = "error";
+      alert.error = String(error);
+    }
+    if (alerts.includes(alert)) renderIncomingAlert();
+  }
+  incomingDialog.addEventListener("close", () => {
+    alerts.shift();
+    if (alerts.length) renderIncomingAlert();
+  });
+  el("incoming-send-ack").onclick = () => {
+    if (alerts[0]) void sendAlertAck(alerts[0]);
+  };
+  el("incoming-dismiss").onclick = () => incomingDialog.close();
+  el("incoming-open").onclick = () => {
+    incomingDialog.close();
+    el("messages-button").click();
+  };
+  function saveOutbox() {
+    localStorage.setItem(
+      "openbeacon-outbox",
+      JSON.stringify(outbox.slice(0, 200)),
+    );
+  }
+  async function sendMessage(item: SentMessage) {
+    item.state = "sending";
+    item.detail = undefined;
+    saveOutbox();
+    renderMessages();
+    try {
+      const packet = await desktop.sendAprsMessage(
+        item.from,
+        item.to,
+        item.text,
+        item.id,
+        false,
+        item.route,
+        item.path,
+      );
+      showSentPacket(packet);
+      if (item.state === "sending") item.state = "pending";
+    } catch (error) {
+      if (item.state === "sending") {
+        item.state = "error";
+        item.detail = String(error);
+      }
+    }
+    saveOutbox();
+    renderMessages();
+  }
+  el("message-send").onclick = () => {
+    const to = el<HTMLInputElement>("message-to").value.trim().toUpperCase();
+    const text = el<HTMLTextAreaElement>("message-text").value;
+    if (!savedCallsign) {
+      el("message-send-status").textContent =
+        "Set your callsign in My Station first.";
+      return;
+    }
+    if (
+      !/^[A-Z0-9]{3,6}(?:-(?:[0-9]|1[0-5]))?$/.test(to) ||
+      !/^[\x20-\x7a\x7c-\x7e]{1,67}$/.test(text)
+    ) {
+      el("message-send-status").textContent =
+        "Enter a valid callsign and 1–67 printable characters; { is reserved.";
+      return;
+    }
+    const id = Math.floor(Math.random() * 60466176)
+      .toString(36)
+      .toUpperCase()
+      .padStart(5, "0");
+    const item: SentMessage = {
+      from: savedCallsign,
+      to,
+      text,
+      id,
+      route: messageRoute.value,
+      path: messageRoute.value === "rf" ? selectedMessagePath() : "",
+      at: Date.now(),
+      state: "pending",
+    };
+    outbox.unshift(item);
+    outbox = outbox.slice(0, 200);
+    el<HTMLTextAreaElement>("message-text").value = "";
+    el("message-send-status").textContent = "Message added to the outbox.";
+    void sendMessage(item);
+  };
+  function observeMessageTraffic(
+    packet: DecodedPacket,
+    restoring: boolean,
+    newMessage: boolean,
+  ) {
+    const msg = packet.message;
+    if (
+      !msg ||
+      msg.addressee.trim().toUpperCase() !== savedCallsign.toUpperCase()
+    )
+      return;
+    if (msg.kind === "ack" || msg.kind === "reject") {
+      const id =
+        msg.text.match(/^(?:ack|rej)([A-Za-z0-9]{1,5})/i)?.[1] ?? msg.id;
+      const item = outbox.find(
+        (x) =>
+          x.from === savedCallsign &&
+          x.to === packet.source.toUpperCase() &&
+          x.id === id &&
+          (x.state === "pending" ||
+            x.state === "sending" ||
+            x.state === "error"),
+      );
+      if (item) {
+        item.state = msg.kind === "ack" ? "acknowledged" : "rejected";
+        saveOutbox();
+      }
+    } else if (!restoring && msg.kind === "message") {
+      const alert = newMessage ? enqueueMessageAlert(packet) : undefined;
+      if (autoAck.checked && messageCanAck(packet)) {
+        const key = `${packet.source.toUpperCase()}:${msg.addressee.toUpperCase()}:${msg.id}:${msg.text}`;
+        const now = Date.now();
+        if (now - (lastAck.get(key) ?? 0) < 30000) return;
+        lastAck.set(key, now);
+        if (lastAck.size > 1000) lastAck.delete(lastAck.keys().next().value!);
+        if (alert) void sendAlertAck(alert);
+        else
+          void acknowledgeMessage(packet)
+            .then(showSentPacket)
+            .catch((error) => {
+              el("message-send-status").textContent =
+                `Acknowledgement failed: ${String(error)}`;
+            });
+      }
+    }
+  }
   function renderMessages() {
     const identity = savedCallsign.trim().toUpperCase();
     const messages = receivedMessages.forIdentity(identity);
@@ -500,6 +851,29 @@ function startApp() {
         : `No messages received for ${identity} this session.`;
     const list = el("message-list");
     list.replaceChildren();
+    const sent = el("message-outbox");
+    sent.replaceChildren();
+    for (const item of outbox.filter((x) => x.from === identity)) {
+      const article = document.createElement("article");
+      article.className = "message-item";
+      const heading = document.createElement("strong");
+      heading.textContent = `To ${item.to} · ${item.state}`;
+      const meta = document.createElement("div");
+      meta.className = "message-note";
+      meta.textContent = `${item.route === "rf" ? `RF · ${item.path || "Direct"}` : "APRS-IS"} · ID ${item.id} · ${new Date(item.at).toLocaleString()}${item.detail ? ` · ${item.detail}` : ""}`;
+      const body = document.createElement("p");
+      body.textContent = item.text;
+      article.append(heading, meta, body);
+      if (item.state === "pending" || item.state === "error") {
+        const retry = document.createElement("button");
+        retry.type = "button";
+        retry.textContent = "Resend";
+        retry.onclick = () => void sendMessage(item);
+        article.append(retry);
+      }
+      sent.append(article);
+    }
+    if (!sent.childElementCount) sent.textContent = "No sent messages yet.";
     for (const packet of messages) {
       const item = document.createElement("article");
       item.className = "message-item";
@@ -515,6 +889,23 @@ function startApp() {
       inspect.textContent = "View packet";
       inspect.onclick = () => inspectPacket(packet);
       item.append(heading, meta, body, inspect);
+      if (messageCanAck(packet)) {
+        const acknowledge = document.createElement("button");
+        acknowledge.type = "button";
+        acknowledge.textContent = "Send acknowledgement";
+        acknowledge.onclick = async () => {
+          acknowledge.disabled = true;
+          try {
+            showSentPacket(await acknowledgeMessage(packet));
+            acknowledge.textContent = "Acknowledgement sent";
+          } catch (error) {
+            el("message-send-status").textContent =
+              `Acknowledgement failed: ${String(error)}`;
+            acknowledge.disabled = false;
+          }
+        };
+        item.append(acknowledge);
+      }
       list.append(item);
     }
   }
@@ -530,6 +921,12 @@ function startApp() {
     el("messages-button").classList.add("active");
     renderMessages();
     map.resize();
+  };
+  el("message-station").onclick = () => {
+    if (!selected) return;
+    el<HTMLInputElement>("message-to").value = selected;
+    el("messages-button").click();
+    el<HTMLTextAreaElement>("message-text").focus();
   };
   function renderWeatherStations() {
     const root = el("weather-stations");
@@ -554,7 +951,7 @@ function startApp() {
       title.textContent = packet.source;
       const detail = document.createElement("span");
       const temperature = packet.weather?.temperatureFahrenheit;
-      detail.textContent = `${sourceLabel(packet.origin)} · ${new Date(packet.receivedAt).toLocaleString()} · ${temperature == null ? "Temperature unavailable" : `${temperature} °F`}`;
+      detail.textContent = `${sourceLabel(packet.origin)} · ${new Date(packet.receivedAt).toLocaleString()} · ${temperature == null ? "Temperature unavailable" : formatTemp(temperature, units)}`;
       button.append(title, detail);
       button.onclick = () => inspectPacket(packet);
       root.append(button);
@@ -695,9 +1092,22 @@ function startApp() {
         const item = document.createElement("div");
         item.className = "forecast-period";
         const title = document.createElement("strong");
-        title.textContent = `${period.name ?? "Forecast"} · ${period.temperature ?? "—"} °${period.temperatureUnit ?? "F"}`;
+        const f =
+          period.temperatureUnit === "C"
+            ? (Number(period.temperature) * 9) / 5 + 32
+            : Number(period.temperature);
+        title.textContent = `${period.name ?? "Forecast"} · ${period.temperature == null || !Number.isFinite(f) ? "—" : formatTemp(f, units)}`;
         const detail = document.createElement("p");
-        detail.textContent = `${period.shortForecast ?? ""} · Wind ${period.windSpeed ?? "—"} ${period.windDirection ?? ""}`;
+        const wind = String(period.windSpeed ?? "—");
+        const displayedWind =
+          units === "metric" && /mph/i.test(wind)
+            ? wind
+                .replace(/(\d+(?:\.\d+)?)/g, (value: string) =>
+                  String(Math.round(Number(value) * 1.609344)),
+                )
+                .replace(/mph/gi, "km/h")
+            : wind;
+        detail.textContent = `${period.shortForecast ?? ""} · Wind ${displayedWind} ${period.windDirection ?? ""}`;
         item.append(title, detail);
         root.append(item);
       }
@@ -750,7 +1160,6 @@ function startApp() {
     selected = null;
     el("details").hidden = true;
     renderStations();
-    map.resize();
   };
   el("show-packet").onclick = () => {
     const station = selected && stations.get(selected);
@@ -837,17 +1246,408 @@ function startApp() {
   };
   const worldUrl = bundledMap("world-z6.pmtiles");
   const demoUrl = bundledMap("michigan-lower-z12.pmtiles");
-  map.once("load", () => {
-    // Relative local URLs work with the packaged app and Vite; PMTiles reads byte ranges on demand.
-    addBasemap(map, isDark(), "world", worldUrl, 0);
-    addBasemap(map, isDark(), "regional", demoUrl, 7);
+  map.once("load", async () => {
+    try {
+      await protocol.get("bundled-world-z6.pmtiles")?.getHeader();
+      addBasemap(map, isDark(), "world", worldUrl, 0);
+    } catch {
+      el("map-state").textContent = "World overview unavailable";
+    }
+    try {
+      if (
+        localStorage.getItem("openbeacon-map-mode") === "online" &&
+        localStorage.getItem("openbeacon-map-api-key")
+      )
+        activateOnlineMap(localStorage.getItem("openbeacon-map-api-key")!);
+      else if (localStorage.getItem("openbeacon-map-mode") === "downloaded")
+        await activateDownloadedMap();
+      else {
+        await protocol.get("bundled-michigan-lower-z12.pmtiles")?.getHeader();
+        addBasemap(map, isDark(), "regional", demoUrl, 7);
+        el("map-state").textContent = "Offline map · world + Lower Michigan";
+      }
+    } catch {
+      el("map-state").textContent =
+        "Local regional map unavailable · configure maps";
+    }
     addStationLayers();
     void loadSymbolSheets();
     el("map-message").hidden = true;
-    el("map-state").textContent = "Offline map · world + Lower Michigan";
     applyTheme();
     updateMapColors(map, isDark());
   });
+  let downloadedGeneration = 0;
+  async function activateDownloadedMap() {
+    const key = `downloaded-region-${++downloadedGeneration}`;
+    const archive = new PMTiles({
+      getKey: () => key,
+      getBytes: async (offset: number, length: number) => ({
+        data: new Uint8Array(await desktop.readDownloadedMap(offset, length))
+          .buffer,
+      }),
+    });
+    const header = await archive.getHeader();
+    if (header.tileType !== 1)
+      throw new Error("Downloaded map is not a vector PMTiles archive.");
+    protocol.add(archive);
+    removeBasemap(map, "regional");
+    addBasemap(map, isDark(), "regional", `pmtiles://${key}`, 0);
+    el("regional-name").textContent =
+      `${localStorage.getItem("openbeacon-map-region") || "Downloaded region"} · zoom ${header.maxZoom}`;
+    el("map-state").textContent =
+      `Offline map · ${localStorage.getItem("openbeacon-map-region") || "downloaded region"}`;
+    el("map-message").hidden = true;
+    return header;
+  }
+  function activateOnlineMap(apiKey: string) {
+    removeBasemap(map, "regional");
+    addBasemap(
+      map,
+      isDark(),
+      "regional",
+      `https://api.protomaps.com/tiles/v4/{z}/{x}/{y}.mvt?key=${encodeURIComponent(apiKey)}`,
+      0,
+      true,
+    );
+    el("regional-name").textContent = "Protomaps online · zoom 12";
+    el("map-state").textContent = "Online map · Protomaps";
+    el("map-message").hidden = true;
+  }
+  const mapConfigDialog = el<HTMLDialogElement>("map-config-dialog");
+  const regionChoice = el<HTMLSelectElement>("region-choice");
+  type Region = {
+    name: string;
+    geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon;
+  };
+  const countryFeatures = (
+    countriesData as unknown as GeoJSON.FeatureCollection<
+      GeoJSON.Polygon | GeoJSON.MultiPolygon
+    >
+  ).features;
+  const statesTopology = statesData as unknown as Topology;
+  const stateFeatures = (
+    topoFeature(
+      statesTopology,
+      statesTopology.objects.states,
+    ) as unknown as GeoJSON.FeatureCollection<
+      GeoJSON.Polygon | GeoJSON.MultiPolygon
+    >
+  ).features;
+  const usRegionStates: Record<string, string[]> = {
+    Northeast: [
+      "Connecticut",
+      "Maine",
+      "Massachusetts",
+      "New Hampshire",
+      "Rhode Island",
+      "Vermont",
+      "New Jersey",
+      "New York",
+      "Pennsylvania",
+    ],
+    Midwest: [
+      "Illinois",
+      "Indiana",
+      "Michigan",
+      "Ohio",
+      "Wisconsin",
+      "Iowa",
+      "Kansas",
+      "Minnesota",
+      "Missouri",
+      "Nebraska",
+      "North Dakota",
+      "South Dakota",
+    ],
+    South: [
+      "Delaware",
+      "District of Columbia",
+      "Florida",
+      "Georgia",
+      "Maryland",
+      "North Carolina",
+      "South Carolina",
+      "Virginia",
+      "West Virginia",
+      "Alabama",
+      "Kentucky",
+      "Mississippi",
+      "Tennessee",
+      "Arkansas",
+      "Louisiana",
+      "Oklahoma",
+      "Texas",
+    ],
+    West: [
+      "Arizona",
+      "Colorado",
+      "Idaho",
+      "Montana",
+      "Nevada",
+      "New Mexico",
+      "Utah",
+      "Wyoming",
+      "Alaska",
+      "California",
+      "Hawaii",
+      "Oregon",
+      "Washington",
+    ],
+  };
+  const usRegions: Region[] = Object.entries(usRegionStates).map(
+    ([name, states]) => ({
+      name: `U.S. region · ${name}`,
+      geometry: {
+        type: "MultiPolygon",
+        coordinates: stateFeatures
+          .filter((f) => states.includes(String(f.properties?.name)))
+          .flatMap((f) =>
+            f.geometry.type === "Polygon"
+              ? [f.geometry.coordinates]
+              : f.geometry.coordinates,
+          ),
+      },
+    }),
+  );
+  const conus: Region = {
+    name: "Contiguous U.S.",
+    geometry: {
+      type: "Polygon",
+      coordinates: [
+        [
+          [-125, 24],
+          [-66, 24],
+          [-66, 50],
+          [-125, 50],
+          [-125, 24],
+        ],
+      ],
+    },
+  };
+  const regions: Region[] = [
+    conus,
+    ...usRegions,
+    ...stateFeatures.map((f) => ({
+      name: `U.S. · ${String(f.properties?.name)}`,
+      geometry: f.geometry,
+    })),
+    ...countryFeatures.map((f) => ({
+      name: String(f.properties?.name),
+      geometry: f.geometry,
+    })),
+  ];
+  for (const [index, region] of regions.entries()) {
+    const option = document.createElement("option");
+    option.value = String(index);
+    option.textContent = region.name;
+    regionChoice.append(option);
+  }
+  const regionLevel = el<HTMLSelectElement>("region-level");
+  let regionMap: maplibre.Map | undefined;
+  function updateRegionLevel() {
+    if (regionMap?.getLayer("states-fill"))
+      regionMap.setLayoutProperty(
+        "states-fill",
+        "visibility",
+        regionLevel.value === "countries" ? "none" : "visible",
+      );
+  }
+  regionLevel.onchange = updateRegionLevel;
+  function updateRegionSelection() {
+    const index = Number(regionChoice.value);
+    const source = regionMap?.getSource("selected-region") as
+      maplibre.GeoJSONSource | undefined;
+    source?.setData({
+      type: "Feature",
+      properties: {},
+      geometry: regions[index].geometry,
+    });
+  }
+  function openMapConfigurator() {
+    if (mapSettingsDialog.open) mapSettingsDialog.close();
+    el<HTMLInputElement>("map-api-key").value =
+      localStorage.getItem("openbeacon-map-api-key") || "";
+    mapConfigDialog.showModal();
+    if (regionMap) {
+      regionMap.resize();
+      return;
+    }
+    regionMap = new maplibre.Map({
+      container: "region-map",
+      center: [-96, 39],
+      zoom: 2,
+      attributionControl: false,
+      style: {
+        version: 8,
+        sources: {},
+        layers: [
+          {
+            id: "background",
+            type: "background",
+            paint: { "background-color": "#b5d7df" },
+          },
+        ],
+      },
+    });
+    regionMap.addControl(new maplibre.NavigationControl(), "top-right");
+    regionMap.on("load", () => {
+      regionMap!.addSource("countries", {
+        type: "geojson",
+        data: countriesData as unknown as GeoJSON.FeatureCollection,
+      });
+      regionMap!.addSource("states", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: stateFeatures },
+      });
+      regionMap!.addSource("selected-region", {
+        type: "geojson",
+        data: { type: "Feature", properties: {}, geometry: conus.geometry },
+      });
+      for (const id of ["countries", "states"]) {
+        regionMap!.addLayer({
+          id: `${id}-fill`,
+          type: "fill",
+          source: id,
+          paint: {
+            "fill-color": id === "states" ? "#dce9dc" : "#e4eadf",
+            "fill-outline-color": "#7e9b8a",
+          },
+        });
+      }
+      regionMap!.addLayer({
+        id: "selected-fill",
+        type: "fill",
+        source: "selected-region",
+        paint: { "fill-color": "#229b75", "fill-opacity": 0.32 },
+      });
+      regionMap!.addLayer({
+        id: "selected-outline",
+        type: "line",
+        source: "selected-region",
+        paint: { "line-color": "#147454", "line-width": 2 },
+      });
+      for (const id of ["states", "countries"])
+        regionMap!.on("click", `${id}-fill`, (event) => {
+          if (
+            id === "countries" &&
+            regionMap!.queryRenderedFeatures(event.point, {
+              layers: ["states-fill"],
+            }).length
+          )
+            return;
+          const name = event.features?.[0]?.properties?.name;
+          const group =
+            id === "states" && regionLevel.value === "regions"
+              ? Object.keys(usRegionStates).find((key) =>
+                  usRegionStates[key].includes(String(name)),
+                )
+              : undefined;
+          const selectedName = group
+            ? `U.S. region · ${group}`
+            : id === "states"
+              ? `U.S. · ${name}`
+              : name;
+          const index = regions.findIndex((r) => r.name === selectedName);
+          if (index >= 0) {
+            regionChoice.value = String(index);
+            updateRegionSelection();
+          }
+        });
+      updateRegionLevel();
+      updateRegionSelection();
+    });
+  }
+  regionChoice.onchange = updateRegionSelection;
+  el("open-map-configurator").onclick = openMapConfigurator;
+  el("close-map-config").onclick = () => mapConfigDialog.close();
+  el("cancel-map-download").onclick = () => {
+    void desktop.cancelMapDownload();
+    el("map-download-status").textContent = "Canceling download…";
+  };
+  void desktop.onMapDownloadProgress((bytes) => {
+    el("map-download-status").textContent =
+      `Downloading… ${(bytes / 1048576).toFixed(1)} MB saved so far`;
+  });
+  el("download-map").onclick = async () => {
+    const region = regions[Number(regionChoice.value)];
+    if (!region) return;
+    const download = el<HTMLButtonElement>("download-map"),
+      cancel = el<HTMLButtonElement>("cancel-map-download");
+    download.disabled = true;
+    cancel.disabled = false;
+    el("map-download-status").textContent = `Preparing ${region.name}…`;
+    try {
+      await desktop.downloadRegionMap(
+        region.geometry,
+        Number(el<HTMLSelectElement>("map-detail").value),
+      );
+      localStorage.setItem("openbeacon-map-region", region.name);
+      localStorage.setItem("openbeacon-map-mode", "downloaded");
+      localStorage.setItem("openbeacon-map-setup", "done");
+      const header = await activateDownloadedMap();
+      map.fitBounds(
+        [
+          [header.minLon, header.minLat],
+          [header.maxLon, header.maxLat],
+        ],
+        { padding: 45, maxZoom: 10 },
+      );
+      el("map-download-status").textContent =
+        `${region.name} downloaded and selected.`;
+    } catch (error) {
+      el("map-download-status").textContent = String(error);
+    } finally {
+      download.disabled = false;
+      cancel.disabled = true;
+    }
+  };
+  el("use-online-map").onclick = async () => {
+    const key = el<HTMLInputElement>("map-api-key").value.trim();
+    if (!key || !/^[A-Za-z0-9_-]+$/.test(key)) {
+      el("map-online-status").textContent = "Enter your Protomaps API key.";
+      return;
+    }
+    const button = el<HTMLButtonElement>("use-online-map");
+    button.disabled = true;
+    el("map-online-status").textContent = "Checking the map service…";
+    try {
+      const response = await fetch(
+        `https://api.protomaps.com/tiles/v4/0/0/0.mvt?key=${encodeURIComponent(key)}`,
+        { signal: AbortSignal.timeout(10000) },
+      );
+      if (!response.ok)
+        throw new Error(`Map service returned HTTP ${response.status}`);
+      localStorage.setItem("openbeacon-map-api-key", key);
+      localStorage.setItem("openbeacon-map-mode", "online");
+      localStorage.setItem("openbeacon-map-setup", "done");
+      activateOnlineMap(key);
+      el("map-online-status").textContent = "Online map selected.";
+    } catch (error) {
+      el("map-online-status").textContent =
+        `Could not use online maps: ${String(error)}. Check the key, connection, and provider CORS settings.`;
+    } finally {
+      button.disabled = false;
+    }
+  };
+  el("map-provider-link").onclick = (event) => {
+    event.preventDefault();
+    void desktop.openMapProvider().catch((error) => {
+      el("map-online-status").textContent = String(error);
+    });
+  };
+  el("use-offline-map").onclick = async () => {
+    try {
+      await activateDownloadedMap();
+      localStorage.setItem("openbeacon-map-mode", "downloaded");
+    } catch {
+      removeBasemap(map, "regional");
+      addBasemap(map, isDark(), "regional", demoUrl, 7);
+      localStorage.setItem("openbeacon-map-mode", "bundled");
+      el("map-state").textContent = "Offline map · Lower Michigan";
+    }
+    localStorage.setItem("openbeacon-map-setup", "done");
+    el("map-online-status").textContent = "Local map selected.";
+  };
   let localPackId = 0;
   const mapSettingsDialog = el<HTMLDialogElement>("map-settings-dialog");
   el("settings-button").onclick = () => mapSettingsDialog.showModal();
@@ -856,6 +1656,7 @@ function startApp() {
     try {
       removeBasemap(map, "regional");
       addBasemap(map, isDark(), "regional", demoUrl, 7);
+      localStorage.setItem("openbeacon-map-mode", "bundled");
       el("regional-name").textContent = "Lower Michigan · zoom 12";
       el("map-state").textContent = "Offline map · world + Lower Michigan";
       el("map-settings-error").textContent = "";
@@ -950,14 +1751,22 @@ function startApp() {
   const tncKind = el<HTMLSelectElement>("tnc-kind");
   const serialPort = el<HTMLSelectElement>("tnc-serial-port");
   const serialCustom = el<HTMLInputElement>("tnc-serial-custom");
-  const baud = el<HTMLInputElement>("tnc-baud");
+  const baud = el<HTMLSelectElement>("tnc-baud");
+  const customBaud = el<HTMLInputElement>("tnc-custom-baud");
+  function setBaud(value: number) {
+    const option = String(value);
+    baud.value = Array.from(baud.options).some((item) => item.value === option)
+      ? option
+      : "custom";
+    customBaud.value = baud.value === "custom" ? option : "";
+  }
   const flow = el<HTMLSelectElement>("tnc-flow");
   const endpoint = el<HTMLInputElement>("tnc-endpoint");
   const model = el<HTMLSelectElement>("tnc-model");
   if (previousTnc) {
     if (["direwolf", "serial", "kenwood", "tcp"].includes(previousTnc.kind))
       tncKind.value = previousTnc.kind;
-    baud.value = String(previousTnc.baud || 57600);
+    setBaud(previousTnc.baud || 57600);
     flow.value = previousTnc.flow || "none";
     endpoint.value = previousTnc.endpoint || "127.0.0.1:8001";
     model.value = previousTnc.model || "generic";
@@ -979,17 +1788,21 @@ function startApp() {
       ["serial", "kenwood"].includes(tncKind.value) &&
       serialPort.value === "custom";
     baud.required = ["serial", "kenwood"].includes(tncKind.value);
+    el("tnc-custom-baud-label").hidden = baud.value !== "custom";
+    customBaud.required = baud.required && baud.value === "custom";
     endpoint.required = tncKind.value === "tcp";
     el("tnc-model-note").textContent =
       tncKind.value === "kenwood"
         ? "Native monitor mode reads TNC2-style text without setup commands. Enable monitoring on the TNC; output varies by settings. TS-2000 shares its COM port with CAT. Non-packet text is shown in Traffic Monitor."
-        : model.value === "ts2000"
-          ? "TS-2000: the rear COM port is shared with CAT. KISS mode requires an operator-led setup and power cycle; OpenBeacon will not change modes. Groundside observed 57600 baud with RTS/CTS on this setup; verify before connecting."
-          : model.value === "d710"
-            ? "TM-D710: enter KISS mode using the documented model-specific procedure. OpenBeacon will not send setup commands."
-            : model.value === "d74"
-              ? "TH-D74/D75: select KISS mode and USB or Bluetooth on the radio; legacy KISS ON / RESTART commands are not needed."
-              : "Place the TNC in KISS mode before connecting. OpenBeacon sends no setup or mode commands.";
+        : model.value === "nucleotnc"
+          ? "NucleoTNC uses serial KISS at 38400 baud, 8N1, with no flow control. On Linux the ST-Link serial device is commonly /dev/ttyACM0."
+          : model.value === "ts2000"
+            ? "TS-2000: the rear COM port is shared with CAT. KISS mode requires an operator-led setup and power cycle; OpenBeacon will not change modes. Groundside observed 57600 baud with RTS/CTS on this setup; verify before connecting."
+            : model.value === "d710"
+              ? "TM-D710: enter KISS mode using the documented model-specific procedure. OpenBeacon will not send setup commands."
+              : model.value === "d74"
+                ? "TH-D74/D75: select KISS mode and USB or Bluetooth on the radio; legacy KISS ON / RESTART commands are not needed."
+                : "Place the TNC in KISS mode before connecting. OpenBeacon sends no setup or mode commands.";
   }
   async function refreshSerialPorts(initial?: string) {
     const wanted =
@@ -1020,10 +1833,14 @@ function startApp() {
   }
   tncKind.onchange = updateTncKind;
   serialPort.onchange = updateTncKind;
+  baud.onchange = updateTncKind;
   model.onchange = () => {
     if (model.value === "ts2000") {
       baud.value = "57600";
       flow.value = "hardware";
+    } else if (model.value === "nucleotnc") {
+      baud.value = "38400";
+      flow.value = "none";
     }
     updateTncKind();
   };
@@ -1102,7 +1919,11 @@ function startApp() {
           settings.port,
           settings.baud,
           settings.flow,
-          settings.kind === "kenwood" ? "kenwood" : "kiss",
+          settings.kind === "kenwood"
+            ? settings.model === "ts2000"
+              ? "ts2000"
+              : "kenwood"
+            : "kiss",
         );
       } else {
         tncGeneration = await desktop.connectTnc(settings.endpoint, false);
@@ -1137,7 +1958,7 @@ function startApp() {
       kind: tncKind.value as TncSettings["kind"],
       device,
       port,
-      baud: Number(baud.value),
+      baud: Number(baud.value === "custom" ? customBaud.value : baud.value),
       flow: flow.value,
       endpoint: endpoint.value.trim(),
       model: model.value,
@@ -1176,6 +1997,31 @@ function startApp() {
     el("tx-button").querySelector("small")!.textContent = "APRS-IS";
     updateBeaconMode();
   }
+  async function sendConfiguredBeacon() {
+    if (!configuredLocation)
+      throw new Error("Set your station location first.");
+    return el<HTMLSelectElement>("beacon-route").value === "rf"
+      ? desktop.sendRfBeacon(
+          savedCallsign,
+          configuredLocation.lat,
+          configuredLocation.lon,
+          savedSymbol,
+          savedComment,
+          savedRfPath,
+        )
+      : desktop.sendPositionBeacon(
+          savedCallsign,
+          configuredLocation.lat,
+          configuredLocation.lon,
+          savedSymbol,
+          savedComment,
+        );
+  }
+  function beaconRouteLabel() {
+    return el<HTMLSelectElement>("beacon-route").value === "rf"
+      ? "RF TNC"
+      : "APRS-IS";
+  }
   async function scheduledBeacon(generation: number) {
     if (
       !beaconScheduleActive ||
@@ -1187,16 +2033,12 @@ function startApp() {
     updateBeaconMode();
     el("beacon-schedule-state").textContent = "Sending scheduled beacon…";
     try {
-      const result = await desktop.sendPositionBeacon(
-        savedCallsign,
-        configuredLocation.lat,
-        configuredLocation.lon,
-        savedSymbol,
-      );
+      const result = await sendConfiguredBeacon();
       showSentPacket(result);
       if (generation !== beaconScheduleGeneration) return;
       const next = Date.now() + Number(intervalInput.value) * 60000;
-      el("beacon-status").textContent = "Beacon sent to APRS-IS.";
+      el("beacon-status").textContent =
+        `Beacon written to ${beaconRouteLabel()}.`;
       el("beacon-schedule-state").textContent =
         `Automatic beaconing active · next send ${new Date(next).toLocaleTimeString()}`;
       beaconTimer = setTimeout(
@@ -1211,7 +2053,7 @@ function startApp() {
       updateBeaconMode();
     }
   }
-  el("beacon-start").onclick = async () => {
+  async function startAutoBeacon() {
     if (
       beaconSending ||
       beaconScheduleActive ||
@@ -1224,7 +2066,9 @@ function startApp() {
     const generation = ++beaconScheduleGeneration;
     el("beacon-schedule-state").textContent = "Checking saved passcode…";
     try {
-      const saved = await desktop.aprsPasscodeSaved(savedCallsign);
+      const saved =
+        el<HTMLSelectElement>("beacon-route").value === "rf" ||
+        (await desktop.aprsPasscodeSaved(savedCallsign));
       if (generation !== beaconScheduleGeneration) return;
       if (!saved) {
         el("beacon-schedule-state").textContent =
@@ -1233,20 +2077,51 @@ function startApp() {
       }
       localStorage.setItem("openbeacon-beacon-interval", intervalInput.value);
       beaconScheduleActive = true;
-      el("tx-button").querySelector("small")!.textContent = "Auto · APRS-IS";
+      el("tx-button").querySelector("small")!.textContent =
+        `Auto · ${beaconRouteLabel()}`;
       updateBeaconMode();
       void scheduledBeacon(generation);
     } catch (error) {
       el("beacon-schedule-state").textContent = String(error);
     }
-  };
+  }
+  el("beacon-start").onclick = () => void startAutoBeacon();
   el("beacon-stop").onclick = () =>
     stopBeaconSchedule(
       beaconSending
         ? "Stopped; a send already in progress may still complete."
         : "Automatic beaconing stopped.",
     );
+  const beaconMenu = el("beacon-menu");
+  function closeBeaconMenu() {
+    beaconMenu.hidden = true;
+    el("tx-button").setAttribute("aria-expanded", "false");
+  }
   el("tx-button").onclick = () => {
+    beaconMenu.hidden = !beaconMenu.hidden;
+    el("tx-button").setAttribute("aria-expanded", String(!beaconMenu.hidden));
+  };
+  document.addEventListener("click", (event) => {
+    if (
+      !(event.target instanceof Node) ||
+      !el("tx-button").parentElement?.contains(event.target)
+    )
+      closeBeaconMenu();
+  });
+  el("beacon-quick").onclick = async () => {
+    closeBeaconMenu();
+    if (beaconScheduleActive) {
+      stopBeaconSchedule();
+      return;
+    }
+    await startAutoBeacon();
+    if (!beaconScheduleActive) openBeaconSettings();
+  };
+  el("beacon-settings").onclick = () => {
+    closeBeaconMenu();
+    openBeaconSettings();
+  };
+  function openBeaconSettings() {
     el("beacon-status").textContent = "";
     el("beacon-preview").textContent =
       configuredLocation && savedCallsign
@@ -1254,8 +2129,11 @@ function startApp() {
         : "Set your station callsign and manual location before sending.";
     updateBeaconMode();
     beaconDialog.showModal();
-  };
+  }
   function updateBeaconMode() {
+    el("beacon-quick").textContent = beaconScheduleActive
+      ? "Stop automatic beaconing"
+      : "Start automatic beaconing";
     const mobile = el<HTMLSelectElement>("beacon-mode").value === "mobile";
     el("fixed-beacon").hidden = mobile;
     el("mobile-beacon").hidden = !mobile;
@@ -1277,6 +2155,14 @@ function startApp() {
     el<HTMLSelectElement>("beacon-route").disabled = beaconScheduleActive;
   }
   el<HTMLSelectElement>("beacon-mode").onchange = updateBeaconMode;
+  const beaconRoute = el<HTMLSelectElement>("beacon-route");
+  const storedRoute = localStorage.getItem("openbeacon-beacon-route");
+  if (storedRoute === "rf" || storedRoute === "ip")
+    beaconRoute.value = storedRoute;
+  beaconRoute.onchange = () => {
+    localStorage.setItem("openbeacon-beacon-route", beaconRoute.value);
+    updateBeaconMode();
+  };
   el("close-beacon").onclick = () => beaconDialog.close();
   el("passcode-link").onclick = async (event) => {
     event.preventDefault();
@@ -1302,14 +2188,10 @@ function startApp() {
     button.disabled = true;
     el("beacon-status").textContent = "Connecting and verifying login…";
     try {
-      const packet = await desktop.sendPositionBeacon(
-        savedCallsign,
-        configuredLocation.lat,
-        configuredLocation.lon,
-        savedSymbol,
-      );
+      const packet = await sendConfiguredBeacon();
       showSentPacket(packet);
-      el("beacon-status").textContent = "Beacon sent to APRS-IS.";
+      el("beacon-status").textContent =
+        `Beacon written to ${beaconRouteLabel()}.`;
     } catch (error) {
       el("beacon-status").textContent = String(error);
     } finally {
@@ -1351,6 +2233,13 @@ function startApp() {
   el("close-settings").onclick = () => settingsDialog.close();
   let savedCallsign = localStorage.getItem("openbeacon-call") || "";
   let savedSymbol = "/-";
+  let savedComment = "";
+  let savedRfPath = "WIDE2-2";
+  const pathSelect = el<HTMLSelectElement>("station-path");
+  const customPath = el<HTMLInputElement>("station-custom-path");
+  pathSelect.onchange = () => {
+    el("station-custom-path-label").hidden = pathSelect.value !== "custom";
+  };
   let chosenSymbol = "/-";
   let chosenTable: 0 | 1 = 0;
   function setIdentityFields(full: string) {
@@ -1443,10 +2332,17 @@ function startApp() {
   };
   el("station-button").onclick = () => {
     setIdentityFields(savedCallsign);
+    el<HTMLInputElement>("station-comment").value = savedComment;
+    const preset = Array.from(pathSelect.options).some(
+      (o) => o.value === savedRfPath && o.value !== "custom",
+    );
+    pathSelect.value = preset ? savedRfPath : "custom";
+    customPath.value = preset ? "" : savedRfPath;
+    el("station-custom-path-label").hidden = preset;
     el<HTMLInputElement>("station-passcode").value = "";
     void desktop.aprsPasscodeSaved(savedCallsign).then((saved) => {
       el("passcode-state").textContent = saved
-        ? "Passcode saved for this callsign."
+        ? "Passcode saved for this callsign · APRS-IS beaconing enabled."
         : "No passcode saved for this callsign.";
     });
     chosenSymbol = savedSymbol;
@@ -1490,7 +2386,7 @@ function startApp() {
   if (configuredLocation) {
     el<HTMLInputElement>("lat").value = String(configuredLocation.lat);
     el<HTMLInputElement>("lon").value = String(configuredLocation.lon);
-    el<HTMLInputElement>("radius").value = String(configuredLocation.radius);
+    setRadius(configuredLocation.radius);
   }
   const locationControl = document.createElement("div");
   locationControl.className = "maplibregl-ctrl maplibregl-ctrl-group";
@@ -1558,10 +2454,12 @@ function startApp() {
       callsign: savedCallsign,
       lat: configuredLocation?.lat ?? 0,
       lon: configuredLocation?.lon ?? 0,
-      radius: Number(el<HTMLInputElement>("radius").value),
+      radius: radiusKm(),
       location_set: !!configuredLocation,
       symbol: savedSymbol,
       theme,
+      beacon_comment: savedComment,
+      rf_path: savedRfPath,
     };
   }
   function applySettings(settings: ConnectionSettings) {
@@ -1569,6 +2467,8 @@ function startApp() {
       beaconScheduleActive &&
       (settings.callsign !== savedCallsign ||
         settings.symbol !== savedSymbol ||
+        (settings.beacon_comment ?? "") !== savedComment ||
+        (settings.rf_path ?? "WIDE2-2") !== savedRfPath ||
         settings.location_set === false ||
         !configuredLocation ||
         settings.lat !== configuredLocation.lat ||
@@ -1586,6 +2486,8 @@ function startApp() {
     savedCallsign = settings.callsign;
     if (!el("messages-panel").hidden) renderMessages();
     savedSymbol = settings.symbol || "/-";
+    savedComment = settings.beacon_comment ?? "";
+    savedRfPath = settings.rf_path ?? "WIDE2-2";
     chosenSymbol = savedSymbol;
     chosenTable = symbolCells(chosenSymbol)?.table ?? 0;
     setIdentityFields(savedCallsign);
@@ -1599,7 +2501,7 @@ function startApp() {
       settings.location_set !== false ? String(settings.lat) : "";
     el<HTMLInputElement>("lon").value =
       settings.location_set !== false ? String(settings.lon) : "";
-    el<HTMLInputElement>("radius").value = String(settings.radius);
+    setRadius(settings.radius);
     configuredLocation =
       settings.location_set !== false
         ? { lat: settings.lat, lon: settings.lon, radius: settings.radius }
@@ -1690,7 +2592,8 @@ function startApp() {
     recent.unshift(packet);
     monitorPackets.unshift(packet);
     if (monitorSnapshot) monitorWhilePaused++;
-    receivedMessages.observe(packet, savedCallsign);
+    const newMessage = receivedMessages.observe(packet, savedCallsign);
+    observeMessageTraffic(packet, restoringHistory, newMessage);
     if (packet.weather && packet.source) {
       const key = `${packet.origin}:${packet.source.toUpperCase()}`;
       weatherPackets.delete(key);
@@ -1788,10 +2691,14 @@ function startApp() {
           location_set: true,
           symbol: savedSymbol,
           theme,
+          beacon_comment: savedComment,
+          rf_path: savedRfPath,
         };
         await desktop.saveSettings(settings);
       }
       if (settings) applySettings(settings);
+      else if (!localStorage.getItem("openbeacon-map-setup"))
+        openMapConfigurator();
       try {
         const history = await desktop.loadHistory();
         for (const packet of history.reverse()) observePacket(packet, true);
@@ -1850,10 +2757,34 @@ function startApp() {
       return;
     }
     const full = selectedSsid ? `${base}-${selectedSsid}` : base;
+    const comment = el<HTMLInputElement>("station-comment").value;
+    const rfPath = (
+      pathSelect.value === "custom" ? customPath.value : pathSelect.value
+    )
+      .trim()
+      .toUpperCase();
+    if (!/^[\x20-\x7e]{0,40}$/.test(comment)) {
+      el("station-error").textContent =
+        "Beacon comment must contain up to 40 printable English characters.";
+      return;
+    }
+    if (
+      rfPath &&
+      (rfPath.split(",").length > 8 ||
+        !rfPath
+          .split(",")
+          .every((part) => /^[A-Z0-9]{1,6}(?:-(?:[0-9]|1[0-5]))?$/.test(part)))
+    ) {
+      el("station-error").textContent =
+        "Enter up to 8 comma-separated callsigns or aliases, each with an optional SSID from 0 to 15.";
+      return;
+    }
     const settings = {
       ...currentSettings(),
       callsign: full,
       symbol: chosenSymbol,
+      beacon_comment: comment,
+      rf_path: rfPath,
     };
     try {
       const passcode = el<HTMLInputElement>("station-passcode").value;
@@ -1879,7 +2810,7 @@ function startApp() {
     if (!locationForm.reportValidity()) return;
     const lat = Number(el<HTMLInputElement>("lat").value),
       lon = Number(el<HTMLInputElement>("lon").value);
-    const radius = Number(el<HTMLInputElement>("radius").value);
+    const radius = radiusKm();
     const settings: ConnectionSettings = {
       callsign: savedCallsign,
       lat,
@@ -1891,6 +2822,8 @@ function startApp() {
       location_set: true,
       symbol: savedSymbol,
       theme,
+      beacon_comment: savedComment,
+      rf_path: savedRfPath,
     };
     try {
       await desktop.saveSettings(settings);

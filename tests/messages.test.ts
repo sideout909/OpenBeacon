@@ -43,3 +43,43 @@ test("inbox receives only messages addressed to the exact configured station", (
     ["Third", "Second"],
   );
 });
+
+test("duplicate copies across digipeaters and APRS-IS are one inbox message", () => {
+  const inbox = new MessageInbox();
+  const direct = message("K8OTY-15", "Hello");
+  direct.origin = "rf";
+  direct.receivedAt = 1_000_000;
+  assert.equal(inbox.observe(direct, "K8OTY-15"), true);
+  const repeated = {
+    ...direct,
+    origin: "aprs-is" as const,
+    path: ["WIDE2-1", "DIGI*"],
+    receivedAt: direct.receivedAt + 1000,
+  };
+  assert.equal(inbox.observe(repeated, "K8OTY-15"), false);
+  assert.equal(inbox.forIdentity("K8OTY-15").length, 1);
+  assert.equal(
+    inbox.observe(
+      { ...repeated, message: { ...repeated.message!, text: "Different" } },
+      "K8OTY-15",
+    ),
+    true,
+  );
+  assert.equal(
+    inbox.observe(
+      { ...repeated, receivedAt: direct.receivedAt + 31 * 60_000 },
+      "K8OTY-15",
+    ),
+    true,
+  );
+});
+
+test("unnumbered identical messages only collapse within a short interval", () => {
+  const inbox = new MessageInbox();
+  const p = message("K8OTY-15", "Hello");
+  p.message!.id = null;
+  p.receivedAt = 100_000;
+  assert.equal(inbox.observe(p, "K8OTY-15"), true);
+  assert.equal(inbox.observe({ ...p, receivedAt: 120_000 }, "K8OTY-15"), false);
+  assert.equal(inbox.observe({ ...p, receivedAt: 131_000 }, "K8OTY-15"), true);
+});

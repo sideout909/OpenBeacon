@@ -1,3 +1,11 @@
+import {
+  temperature,
+  speedMph,
+  speedKnots,
+  pressure,
+  rainfall,
+  type Units,
+} from "./units";
 import { identifyDevice } from "./device-id";
 import { sourceLabel, type DecodedPacket } from "./aprs";
 
@@ -6,6 +14,7 @@ export function showPacket(
   dialog: HTMLDialogElement,
   root: HTMLElement,
   packet: DecodedPacket,
+  units: Units,
 ) {
   root.replaceChildren();
   const row = (label: string, value: string) => {
@@ -38,7 +47,7 @@ export function showPacket(
     );
     row("Symbol", p.symbol);
     if (p.timestamp) row("Packet time", p.timestamp);
-    if (p.speedKnots !== null) row("Speed", `${p.speedKnots} kt`);
+    if (p.speedKnots !== null) row("Speed", speedKnots(p.speedKnots, units));
     if (p.courseDegrees !== null) row("Course", `${p.courseDegrees}°`);
     if (p.comment) row("Comment", p.comment);
   }
@@ -50,41 +59,52 @@ export function showPacket(
   if (packet.status) row("Status", packet.status);
   if (packet.weather) {
     const w = packet.weather;
-    const weather: [string, number | null, string][] = [
-      ["Temperature", w.temperatureFahrenheit, "°F"],
-      ["Wind direction", w.windDirectionDegrees, "°"],
-      ["Wind speed", w.windSpeedMph, "mph"],
-      ["Wind gust", w.windGustMph, "mph"],
-      ["Humidity", w.humidityPercent, "%"],
+    const weather: [string, string | null][] = [
+      [
+        "Temperature",
+        w.temperatureFahrenheit == null
+          ? null
+          : temperature(w.temperatureFahrenheit, units),
+      ],
+      [
+        "Wind direction",
+        w.windDirectionDegrees == null ? null : `${w.windDirectionDegrees}°`,
+      ],
+      [
+        "Wind speed",
+        w.windSpeedMph == null ? null : speedMph(w.windSpeedMph, units),
+      ],
+      [
+        "Wind gust",
+        w.windGustMph == null ? null : speedMph(w.windGustMph, units),
+      ],
+      ["Humidity", w.humidityPercent == null ? null : `${w.humidityPercent}%`],
       [
         "Pressure",
-        w.pressureTenthsHpa === null ? null : w.pressureTenthsHpa / 10,
-        "hPa",
+        w.pressureTenthsHpa == null
+          ? null
+          : pressure(w.pressureTenthsHpa, units),
       ],
       [
         "Rain (1h)",
-        w.rainLastHourHundredthsInch === null
+        w.rainLastHourHundredthsInch == null
           ? null
-          : w.rainLastHourHundredthsInch / 100,
-        "in",
+          : rainfall(w.rainLastHourHundredthsInch, units),
       ],
       [
         "Rain (24h)",
-        w.rainLast24HoursHundredthsInch === null
+        w.rainLast24HoursHundredthsInch == null
           ? null
-          : w.rainLast24HoursHundredthsInch / 100,
-        "in",
+          : rainfall(w.rainLast24HoursHundredthsInch, units),
       ],
       [
         "Rain (midnight)",
-        w.rainSinceMidnightHundredthsInch === null
+        w.rainSinceMidnightHundredthsInch == null
           ? null
-          : w.rainSinceMidnightHundredthsInch / 100,
-        "in",
+          : rainfall(w.rainSinceMidnightHundredthsInch, units),
       ],
     ];
-    for (const [label, value, unit] of weather)
-      if (value != null) row(label, `${value} ${unit}`);
+    for (const [label, value] of weather) if (value != null) row(label, value);
   }
   if (packet.warnings.length) row("Warnings", packet.warnings.join("; "));
   const rawTitle = document.createElement("h3");

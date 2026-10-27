@@ -20,7 +20,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' customprotocol: asset:; connect-src 'self' ipc: http://ipc.localhost https://api.weather.gov; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:;"
+      "csp": "default-src 'self' customprotocol: asset:; connect-src 'self' ipc: http://ipc.localhost https://api.weather.gov https://api.protomaps.com; img-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:;"
     }
   },
   "bundle": {
@@ -28,7 +28,8 @@
     "resources": {
       "../public/maps/world-z6.pmtiles": "maps/world-z6.pmtiles",
       "../public/maps/michigan-lower-z12.pmtiles": "maps/michigan-lower-z12.pmtiles",
-      "resources/direwolf-linux-x86_64": "direwolf-linux-x86_64"
+      "resources/direwolf-linux-x86_64": "direwolf-linux-x86_64",
+      "resources/pmtiles-linux-x86_64": "pmtiles-linux-x86_64"
     },
     "icon": [
       "icons/32x32.png",

@@ -12,6 +12,8 @@ export type ConnectionSettings = {
   location_set: boolean;
   symbol: string;
   theme: Theme;
+  beacon_comment: string;
+  rf_path: string;
 };
 export type ConnectionState =
   "connecting" | "connected" | "reconnecting" | "error" | "disconnected";
@@ -67,16 +69,60 @@ export const desktop = {
     lat: number,
     lon: number,
     symbol: string,
-  ) => invoke<string>("send_position_beacon", { callsign, lat, lon, symbol }),
+    comment: string,
+  ) =>
+    invoke<string>("send_position_beacon", {
+      callsign,
+      lat,
+      lon,
+      symbol,
+      comment,
+    }),
+  sendRfBeacon: (
+    callsign: string,
+    lat: number,
+    lon: number,
+    symbol: string,
+    comment: string,
+    path: string,
+  ) =>
+    invoke<string>("send_rf_beacon", {
+      callsign,
+      lat,
+      lon,
+      symbol,
+      comment,
+      path,
+    }),
+  sendAprsMessage: (
+    callsign: string,
+    to: string,
+    text: string,
+    id: string,
+    ack: boolean,
+    route: string,
+    path: string,
+  ) =>
+    invoke<string>("send_aprs_message", {
+      request: { callsign, to, text, id, ack, route, path },
+    }),
   saveAprsPasscode: (callsign: string, passcode: string) =>
     invoke<void>("save_aprs_passcode", { callsign, passcode }),
   aprsPasscodeSaved: (callsign: string) =>
     invoke<boolean>("aprs_passcode_saved", { callsign }),
   clearAprsPasscode: () => invoke<void>("clear_aprs_passcode"),
+  openMapProvider: () => invoke<void>("open_map_provider"),
   openPasscodeGenerator: () => invoke<void>("open_passcode_generator"),
   loadHistory: () => invoke<DecodedPacket[]>("load_history"),
   onHistoryError: (handler: (message: string) => void) =>
     listen<string>("history-error", (event) => handler(event.payload)),
+  downloadRegionMap: (geometry: unknown, zoom: number) =>
+    invoke<void>("download_region_map", { geometry, zoom }),
+  cancelMapDownload: () => invoke<void>("cancel_map_download"),
+  readDownloadedMap: (offset: number, length: number) =>
+    invoke<number[]>("read_downloaded_map", { offset, length }),
+  onMapDownloadProgress: (handler: (bytes: number) => void) =>
+    listen<number>("map-download-progress", (event) => handler(event.payload)),
   readMapRange: (name: string, offset: number, length: number) =>
     invoke<number[]>("read_map_range", { name, offset, length }),
   loadSettings: () => invoke<ConnectionSettings | null>("load_settings"),

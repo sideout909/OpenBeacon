@@ -9,3 +9,5 @@
 - MapLibre GL JS is BSD-3-Clause; PMTiles is BSD-3-Clause. JavaScript and Rust dependencies retain their own licenses. This is not yet a complete distribution inventory.
 
 - The bundled [APRS device identification database](https://github.com/aprsorg/aprs-deviceid) snapshot is maintained by Hessu, OH7LZB, and contributors, and licensed under [CC BY-SA 2.0](https://creativecommons.org/licenses/by-sa/2.0/). See [snapshot provenance](src/data/README.md).
+
+- The Linux x86-64 map extractor bundles [go-pmtiles 1.31.2](https://github.com/protomaps/go-pmtiles), copyright Protomaps LLC, BSD-3-Clause; see [license](third-party/pmtiles/LICENSE). Regional outlines use [Natural Earth](https://www.naturalearthdata.com/about/terms-of-use/) public-domain country data and [us-atlas](https://github.com/topojson/us-atlas) U.S. Census Bureau state boundaries. Downloaded basemaps are produced works of OpenStreetMap data under the ODbL, with OpenStreetMap and Protomaps attribution.

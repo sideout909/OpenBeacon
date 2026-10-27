@@ -56,11 +56,11 @@ export function addBasemap(
   id: string,
   url: string,
   minzoom: number,
+  online = false,
 ) {
   map.addSource(id, {
     type: "vector",
-    url,
-    ...(id === "regional" ? { maxzoom: 12 } : {}),
+    ...(online ? { tiles: [url], maxzoom: 12 } : { url }),
     attribution: "© OpenStreetMap contributors · Protomaps",
   });
   const p = palette(isDark);

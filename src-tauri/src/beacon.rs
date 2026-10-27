@@ -4,7 +4,7 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 use tauri::Manager;
 
-fn position(lat: f64, lon: f64, symbol: &str) -> Result<String, String> {
+pub(crate) fn position(lat: f64, lon: f64, symbol: &str) -> Result<String, String> {
     if !lat.is_finite()
         || !lon.is_finite()
         || lat.abs() > 90.0
@@ -39,7 +39,7 @@ fn position(lat: f64, lon: f64, symbol: &str) -> Result<String, String> {
         chars[1]
     ))
 }
-fn transmit(call: &str, passcode: &str, payload: &str) -> Result<String, String> {
+pub(crate) fn transmit(call: &str, passcode: &str, payload: &str) -> Result<String, String> {
     let address = ("rotate.aprs2.net", 14580)
         .to_socket_addrs()
         .map_err(|e| e.to_string())?
@@ -144,7 +144,7 @@ pub fn save_aprs_passcode(
     }
     file.write_all(&data).map_err(|e| e.to_string())
 }
-fn load_passcode(app: &tauri::AppHandle, callsign: &str) -> Result<String, String> {
+pub(crate) fn load_passcode(app: &tauri::AppHandle, callsign: &str) -> Result<String, String> {
     let data = std::fs::read(credential_path(app)?)
         .map_err(|_| "Save an APRS-IS passcode in My Station first.".to_string())?;
     let saved: Passcode = serde_json::from_slice(&data)
@@ -181,6 +181,7 @@ pub async fn send_position_beacon(
     lat: f64,
     lon: f64,
     symbol: String,
+    comment: String,
 ) -> Result<String, String> {
     let call = callsign.trim().to_ascii_uppercase();
     let mut parts = call.split('-');
@@ -197,7 +198,10 @@ pub async fn send_position_beacon(
     if passcode.is_empty() || passcode.len() > 5 || !passcode.bytes().all(|b| b.is_ascii_digit()) {
         return Err("Enter a valid APRS-IS passcode".into());
     }
-    let payload = position(lat, lon, &symbol)?;
+    if comment.len() > 40 || !comment.bytes().all(|b| (32..=126).contains(&b)) {
+        return Err("Beacon comment must be at most 40 printable ASCII characters".into());
+    }
+    let payload = format!("{}{}", position(lat, lon, &symbol)?, comment);
     tauri::async_runtime::spawn_blocking(move || transmit(&call, &passcode, &payload))
         .await
         .map_err(|e| e.to_string())?

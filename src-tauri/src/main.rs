@@ -3,6 +3,7 @@
 mod beacon;
 mod history;
 mod maps;
+mod messaging;
 mod tnc;
 
 use openbeacon_packet::{
@@ -143,7 +144,7 @@ fn connect_aprs(
                                                     &app,
                                                     generation,
                                                     "connected",
-                                                    "Connected · receive only",
+                                                    "Connected",
                                                 )
                                             }
                                             Line::Data(line) if !line.starts_with(b"#") => {
@@ -211,6 +212,13 @@ struct SavedSettings {
     symbol: String,
     #[serde(default = "default_theme")]
     theme: String,
+    #[serde(default)]
+    beacon_comment: String,
+    #[serde(default = "default_rf_path")]
+    rf_path: String,
+}
+fn default_rf_path() -> String {
+    "WIDE2-2".into()
 }
 fn default_theme() -> String {
     "system".into()
@@ -237,11 +245,38 @@ fn load_settings(app: tauri::AppHandle) -> Result<Option<SavedSettings>, String>
         Err(e) => Err(format!("Could not read saved settings: {e}")),
     }
 }
+fn valid_rf_path(path: &str) -> bool {
+    path.is_empty()
+        || (path.len() <= 71
+            && path.split(',').count() <= 8
+            && path.split(',').all(|part| {
+                let mut fields = part.split('-');
+                let call = fields.next().unwrap_or("");
+                let ssid = fields.next();
+                !call.is_empty()
+                    && call.len() <= 6
+                    && call
+                        .bytes()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+                    && ssid.is_none_or(|v| {
+                        !v.is_empty()
+                            && v.bytes().all(|b| b.is_ascii_digit())
+                            && v.parse::<u8>().is_ok_and(|n| n <= 15)
+                    })
+                    && fields.next().is_none()
+            }))
+}
 #[tauri::command]
 fn save_settings(app: tauri::AppHandle, settings: SavedSettings) -> Result<(), String> {
     if !matches!(settings.theme.as_str(), "system" | "light" | "dark")
         || settings.symbol.len() != 2
         || !settings.symbol.is_ascii()
+        || settings.beacon_comment.len() > 40
+        || !settings
+            .beacon_comment
+            .bytes()
+            .all(|b| (32..=126).contains(&b))
+        || !valid_rf_path(&settings.rf_path)
         || settings.callsign.len() > 9
         || !settings.lat.is_finite()
         || !settings.lon.is_finite()
@@ -265,6 +300,12 @@ fn disconnect_aprs(state: State<'_, Connection>) {
     state.0.fetch_add(1, Ordering::SeqCst);
 }
 #[tauri::command]
+fn open_map_provider(app: tauri::AppHandle) -> Result<(), String> {
+    app.opener()
+        .open_url("https://protomaps.com/api", None::<&str>)
+        .map_err(|e| e.to_string())
+}
+#[tauri::command]
 fn open_passcode_generator(app: tauri::AppHandle) -> Result<(), String> {
     app.opener()
         .open_url("https://aprs.do3sww.de/", None::<&str>)
@@ -276,11 +317,15 @@ fn main() {
         .setup(|app| {
             app.manage(Connection::default());
             app.manage(tnc::Tnc::default());
+            app.manage(maps::MapDownload::default());
             app.manage(tnc::Modem::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             maps::read_map_range,
+            maps::read_downloaded_map,
+            maps::download_region_map,
+            maps::cancel_map_download,
             tnc::connect_tnc,
             tnc::connect_serial_tnc,
             tnc::list_serial_devices,
@@ -290,10 +335,13 @@ fn main() {
             tnc::disconnect_tnc,
             history::load_history,
             beacon::send_position_beacon,
+            messaging::send_aprs_message,
+            tnc::send_rf_beacon,
             beacon::save_aprs_passcode,
             beacon::aprs_passcode_saved,
             beacon::clear_aprs_passcode,
             open_passcode_generator,
+            open_map_provider,
             connect_aprs,
             disconnect_aprs,
             load_settings,
