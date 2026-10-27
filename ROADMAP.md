@@ -45,14 +45,14 @@ After the first release, finish the broader product scope with telemetry, object
 
 **Goal:** keep the responsiveness already demonstrated while preparing for real data and a complete interface.
 
-- [ ] Separate map rendering, interface components, data models, and desktop services; replace prototype-only global state and generated demo screen. Basemap rendering, shell markup, station data, and desktop boundary have been extracted; the main controller and shell still need further decomposition.
-- [ ] Establish a stable Rust-to-frontend contract for station observations, source, timestamps, status, and errors. The current receive boundary and its limitations are documented in PACKET_CONTRACT.md; RF event integration and more detailed error codes remain future work. Keep raw packets available when they exist; aprs.fi lookup records are not raw packets.
-- [x] Set up dependency lockfiles, development commands, formatting, linting, meaningful tests, and a Linux CI workflow. The workflow must be exercised on GitHub once the code is pushed.
+- [x] Establish initial separation of basemap rendering, interface shell, station data, and desktop services. The app controller is scoped to startup; further decomposition of the controller and shell is ongoing interface work in Milestone 1.
+- [x] Define the initial Rust-to-frontend receive contract for station observations, source, timestamps, status, errors, and raw data; see PACKET_CONTRACT.md. RF event integration, richer error codes, and separate aprs.fi lookup records are future work.
+- [x] Set up dependency lockfiles, development commands, formatting, linting, meaningful tests, and a Linux CI workflow. The initial Linux workflow passed on GitHub.
 - [x] The owner accepted current interactive responsiveness and chose not to require numeric benchmarks or stress testing for Milestone 0. Monitor responsiveness as real data and functionality grow; representative lower-spec performance can be checked during release hardening.
 - [x] Validate on-demand local map reads in the Linux release executable. The backend reads capped file ranges and PMTiles uses its bounded default directory cache; map archives remain separate from embedded web assets. Installer and other platform verification remain in Milestone 3.
-- [ ] Verify bundled style, symbols, fonts, attribution, and map assets function offline. Linux release rendering and local glyphs/attribution have been checked; symbol display and remaining distribution provenance still need verification. See THIRD-PARTY-NOTICES.md.
+- [x] Verify the Linux release displays the local regional map, place labels, own-station symbol, and attribution without Internet, and record known asset sources and licensing uncertainties. World coverage, full glyph/symbol coverage, and redistribution rights remain Milestone 3 and release work; see THIRD-PARTY-NOTICES.md.
 
-**Exit:** a clean Linux build opens its local map without network access and the owner accepts its responsiveness. Numeric load targets are deferred by the owner; unresolved distribution licensing and cross-platform packaging remain release work.
+**Exit — complete for the Linux foundation:** the Linux release executable opens its local regional map without network access and the owner accepts its responsiveness. Numeric load targets are deferred by the owner; unresolved distribution licensing and cross-platform packaging remain release work.
 
 ## Milestone 1 — Main interface and navigation
 
