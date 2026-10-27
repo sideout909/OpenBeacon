@@ -43,3 +43,19 @@ test("station observations preserve provenance and update the least recently hea
   store.observe(noPosition);
   assert.equal(store.stations.has("FOUR"), false);
 });
+
+test("tracks keep distinct positions, stay bounded and follow station eviction", () => {
+  const store = new StationStore(1);
+  const first = packet("one", 1);
+  store.observe(first);
+  store.observe(first);
+  assert.equal(store.tracks.get("ONE")?.length, 1);
+  for (let n = 1; n <= 105; n++) {
+    const next = packet("one", n + 1);
+    next.position!.latitude = 42 + n / 1000;
+    store.observe(next);
+  }
+  assert.equal(store.tracks.get("ONE")?.length, 100);
+  store.observe(packet("two", 200));
+  assert.equal(store.tracks.has("ONE"), false);
+});

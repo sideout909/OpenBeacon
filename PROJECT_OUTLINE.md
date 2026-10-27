@@ -91,7 +91,7 @@ Each pack should include its geographic coverage, zoom range, source, update dat
 - Provide connection status, receive/transmit counters, audio/TNC diagnostics, raw packet monitor, and reconnect behavior.
 - Support multiple receive sources where useful, with source labels preserved on packets.
 - Treat Dire Wolf integration as an adapter. OpenBeacon should not depend on Dire Wolf’s internal implementation for APRS decoding or app state.
-- Start with users installing Dire Wolf separately. Consider optional managed/bundled builds only after licensing, code signing, updates, and per-OS packaging are settled. Dire Wolf itself runs on Windows, Linux, and macOS and is designed to act as a soundcard modem/TNC for other applications.
+- Bundle and manage Dire Wolf with OpenBeacon so users do not need a separate installation. Verify licensing, code signing, updates, and per-OS packaging before release. Dire Wolf itself runs on Windows, Linux, and macOS and is designed to act as a soundcard modem/TNC for other applications.
 
 ### B. APRS packet and station engine
 

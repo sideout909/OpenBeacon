@@ -1,0 +1,26 @@
+diff --git a/src/kiss_frame.c b/src/kiss_frame.c
+index 65a0942..4445b09 100644
+--- a/src/kiss_frame.c
++++ b/src/kiss_frame.c
+@@ -537,6 +537,8 @@ void kiss_process_msg (unsigned char *kiss_msg, int kiss_len, int debug, struct
+ 	int chan;
+ 	int cmd;
+ 	alevel_t alevel;
++        /* OpenBeacon receive-only build: never accept KISS commands or transmit data. */
++        return;
+ 
+ // New in 1.7:
+ // We can have KISS TCP ports which convey only a single radio channel.
+diff --git a/src/kissnet.c b/src/kissnet.c
+index 97094a0..ce82ecb 100644
+--- a/src/kissnet.c
++++ b/src/kissnet.c
+@@ -555,7 +555,7 @@ static THREAD_F connect_listen_thread (void *arg)
+ 
+         setsockopt (listen_sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&bcopt, 4);
+ 
+-    	sockaddr.sin_addr.s_addr = INADDR_ANY;
++    	sockaddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+ 	sockaddr.sin_port = htons(kps->tcp_port);
+     	sockaddr.sin_family = AF_INET;
+ 

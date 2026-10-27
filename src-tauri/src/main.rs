@@ -1,6 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod beacon;
+mod history;
 mod maps;
+mod tnc;
 
 use openbeacon_packet::{
     aprs::{decode_tnc2, DecodedPacket, PacketOrigin},
@@ -17,6 +20,7 @@ use std::{
     time::Duration,
 };
 use tauri::{Emitter, Manager, State};
+use tauri_plugin_opener::OpenerExt;
 
 #[derive(Default)]
 struct Connection(Arc<AtomicU64>);
@@ -114,7 +118,7 @@ fn connect_aprs(
                     }
                     let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
                     let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
-                    let login = format!("user {call} pass -1 vers OpenBeacon 0.1 filter r/{lat:.5}/{lon:.5}/{radius}\r\n");
+                    let login = format!("user {call} pass -1 vers OpenBeacon 0.1 filter r/{lat:.5}/{lon:.5}/{radius} g/{call}\r\n");
                     if stream.write_all(login.as_bytes()).is_err() {
                         emit_status(
                             &app,
@@ -160,6 +164,9 @@ fn connect_aprs(
                                 Err(_) => break,
                             }
                             if !batch.is_empty() && active(&token, generation) {
+                                if let Err(error) = history::save(&app, &batch) {
+                                    let _ = app.emit("history-error", error);
+                                }
                                 let _ = app.emit(
                                     "aprs-packets",
                                     Packets {
@@ -257,19 +264,46 @@ fn save_settings(app: tauri::AppHandle, settings: SavedSettings) -> Result<(), S
 fn disconnect_aprs(state: State<'_, Connection>) {
     state.0.fetch_add(1, Ordering::SeqCst);
 }
+#[tauri::command]
+fn open_passcode_generator(app: tauri::AppHandle) -> Result<(), String> {
+    app.opener()
+        .open_url("https://aprs.do3sww.de/", None::<&str>)
+        .map_err(|e| e.to_string())
+}
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             app.manage(Connection::default());
+            app.manage(tnc::Tnc::default());
+            app.manage(tnc::Modem::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             maps::read_map_range,
+            tnc::connect_tnc,
+            tnc::connect_serial_tnc,
+            tnc::list_serial_devices,
+            tnc::list_capture_devices,
+            tnc::start_direwolf,
+            tnc::stop_direwolf,
+            tnc::disconnect_tnc,
+            history::load_history,
+            beacon::send_position_beacon,
+            beacon::save_aprs_passcode,
+            beacon::aprs_passcode_saved,
+            beacon::clear_aprs_passcode,
+            open_passcode_generator,
             connect_aprs,
             disconnect_aprs,
             load_settings,
             save_settings
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run OpenBeacon");
+        .build(tauri::generate_context!())
+        .expect("failed to build OpenBeacon")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                tnc::shutdown(app);
+            }
+        });
 }

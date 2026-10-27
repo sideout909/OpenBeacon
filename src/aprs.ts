@@ -15,6 +15,9 @@ export interface WeatherReport {
   windDirectionDegrees: number | null;
   windSpeedMph: number | null;
   windGustMph: number | null;
+  rainLastHourHundredthsInch: number | null;
+  rainLast24HoursHundredthsInch: number | null;
+  rainSinceMidnightHundredthsInch: number | null;
   humidityPercent: number | null;
   pressureTenthsHpa: number | null;
   raw: string;
@@ -24,6 +27,9 @@ export interface DecodedPacket {
   origin: PacketOrigin;
   raw: string;
   rawBytes: number[];
+  ax25Bytes?: number[] | null;
+  kissPort?: number | null;
+  sourceInterface?: string | null;
   source: string;
   destination: string;
   path: string[];
@@ -46,7 +52,7 @@ export interface Station {
   latitude: number;
   symbol: string;
   comment: string;
-  packet: string;
+  packet: DecodedPacket;
   heardAt: number;
   source: PacketOrigin;
   ambiguity: number;

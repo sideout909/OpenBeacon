@@ -48,6 +48,9 @@ pub struct DecodedPacket {
     /// Lossy human-readable display; raw_bytes retains the original packet.
     pub raw: String,
     pub raw_bytes: Vec<u8>,
+    pub ax25_bytes: Option<Vec<u8>>,
+    pub kiss_port: Option<u8>,
+    pub source_interface: Option<String>,
     pub source: String,
     pub destination: String,
     pub path: Vec<String>,
@@ -217,6 +220,9 @@ pub fn decode_tnc2(bytes: &[u8]) -> DecodedPacket {
         origin: PacketOrigin::Unknown,
         raw: text(bytes),
         raw_bytes: bytes.to_vec(),
+        ax25_bytes: None,
+        kiss_port: None,
+        source_interface: None,
         source: String::new(),
         destination: String::new(),
         path: vec![],
@@ -398,5 +404,6 @@ pub fn decode_rf_frame(
     line.extend_from_slice(&ax.payload);
     let mut result = decode_tnc2(&line);
     result.origin = PacketOrigin::Rf;
+    result.ax25_bytes = Some(frame.to_vec());
     Ok((ax, result))
 }

@@ -28,6 +28,55 @@ export interface PacketBatch {
 }
 
 export const desktop = {
+  listCaptureDevices: () =>
+    invoke<{ id: string; name: string }[]>("list_capture_devices"),
+  startDirewolf: (audioDevice: string) =>
+    invoke<void>("start_direwolf", { audioDevice }),
+  stopDirewolf: () => invoke<void>("stop_direwolf"),
+  connectTnc: (endpoint: string, managed: boolean) =>
+    invoke<number>("connect_tnc", { endpoint, managed }),
+  connectSerialTnc: (port: string, baud: number, flow: string, mode: string) =>
+    invoke<number>("connect_serial_tnc", { port, baud, flow, mode }),
+  listSerialDevices: () =>
+    invoke<{ id: string; name: string }[]>("list_serial_devices"),
+  disconnectTnc: () => invoke<void>("disconnect_tnc"),
+  onTncStatus: (
+    handler: (status: {
+      generation: number;
+      state: string;
+      message: string;
+      received: number;
+      errors: number;
+    }) => void,
+  ) =>
+    listen("tnc-status", (event) =>
+      handler(
+        event.payload as {
+          generation: number;
+          state: string;
+          message: string;
+          received: number;
+          errors: number;
+        },
+      ),
+    ),
+  onTncPackets: (handler: (batch: PacketBatch) => void) =>
+    listen<PacketBatch>("tnc-packets", (event) => handler(event.payload)),
+  sendPositionBeacon: (
+    callsign: string,
+    lat: number,
+    lon: number,
+    symbol: string,
+  ) => invoke<string>("send_position_beacon", { callsign, lat, lon, symbol }),
+  saveAprsPasscode: (callsign: string, passcode: string) =>
+    invoke<void>("save_aprs_passcode", { callsign, passcode }),
+  aprsPasscodeSaved: (callsign: string) =>
+    invoke<boolean>("aprs_passcode_saved", { callsign }),
+  clearAprsPasscode: () => invoke<void>("clear_aprs_passcode"),
+  openPasscodeGenerator: () => invoke<void>("open_passcode_generator"),
+  loadHistory: () => invoke<DecodedPacket[]>("load_history"),
+  onHistoryError: (handler: (message: string) => void) =>
+    listen<string>("history-error", (event) => handler(event.payload)),
   readMapRange: (name: string, offset: number, length: number) =>
     invoke<number[]>("read_map_range", { name, offset, length }),
   loadSettings: () => invoke<ConnectionSettings | null>("load_settings"),

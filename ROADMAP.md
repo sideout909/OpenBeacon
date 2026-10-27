@@ -11,19 +11,21 @@ OpenBeacon is an offline-first, cross-platform APRS workstation with a responsiv
 ### Decisions already made
 
 - Keep the map smooth and readable, including during packet bursts.
-- Ship a worldwide offline overview through zoom 6, subject to licensing, attribution, and package verification.
+- Ship a worldwide offline overview through zoom 6 plus a Detroit-area sample through zoom 12, subject to licensing, attribution, and package verification. On a clean install, center the initial map view on Detroit; restore the user’s saved view on subsequent launches.
 - Make optional regional and contiguous-US packs available through zoom 12 initially. Users choose their coverage and storage location.
 - Offer an optional online basemap. Decide its provider, costs, limits, and offline behavior before release.
 - Keep maps, RF operation, GPS, stored data, and decoding useful without Internet access.
-- Populate stations from a live, filtered APRS-IS receive feed early. Offer user-requested aprs.fi lookups separately, with proper attribution and source timestamps.
+- On a clean install, default the APRS-IS receive feed to a 50 km radius centered on Detroit and connect automatically when a valid receive-only identity is available; define first-run identity and server requirements before implementation, and allow users to change or disconnect it. Populate stations from a live, filtered APRS-IS receive feed early. Offer user-requested aprs.fi lookups separately, with proper attribution and source timestamps.
 - Keep the aprs.fi integration optional; direct APRS-IS and radio remain independent services.
 
 ## Current status — October 2026
 
-- **Working foundation:** map-first shell with a local zoom-6 world overview and zoom-12 Lower Michigan sample; system/light/dark themes; Station identity, APRS symbol selection, manual position, saved connection settings and auto-connect; APRS-IS receive-only; a two-line source-filtered packet strip; and a collapsible station-details panel. User experience and protocol coverage still need real-world verification.
-- **Partial:** local PMTiles are read on demand, but packaged WebView range behavior and bounded caching still need cross-platform verification; custom map selection currently lasts only for the session. The shared Rust decoder handles uncompressed, compressed, and non-ambiguous Mic-E positions and centers uncompressed ambiguous positions; ambiguous Mic-E is not plotted. Basic message, status, and weather fields are decoded, but dedicated views, complete format coverage, and real-world validation remain open.
-- **Not yet available:** a full station list and packet inspector/history, persistent regional selection, real TNC or GPS connections, APRS-IS/RF transmission, messaging, online basemap, map downloading, and the other main navigation pages. The current View packet action is not a complete inspector.
-- **Readiness:** the owner likes the interactive map prototype, but numeric performance targets, release-grade offline verification, platform builds, and symbol licensing are not complete. Navigation placeholders must remain clearly identified.
+- **Working foundation:** offline map workspace, themes, station identity and manual location, APRS-IS receive, station search and details, a source-filtered packet strip, RF highlights, optional station tracks and age filtering, and a clear-map control that retains history.
+- **Views and history:** Traffic Monitor, received APRS message inbox, received weather stations and NWS forecasts are implemented. SQLite retains up to 10,000 received packets and restores recent views. BBS retrieval, message sending and acknowledgements, and weather upload remain unavailable.
+- **Radio receive:** bundled Linux x86-64 receive-only Dire Wolf, serial and TCP KISS, and Kenwood/TNC2 monitor text are implemented, with optional receiver autoconnect. The owner has successfully received RF; TS-2000 monitor text was observed on the physical radio. Wider device and packaging validation remain open. Dire Wolf 1.8.1 needs an update and security review before distribution.
+- **Beaconing:** one-shot and scheduled fixed-position APRS-IS beacons work; the owner verified appearance on aprs.fi. RF transmission and mobile SmartBeaconing are not yet available in the app. A separately controlled manual TS-2000 RF test was heard on a second radio and reported by the owner on aprs.fi.
+- **Decoding and IDs:** uncompressed, compressed and non-ambiguous Mic-E positions and basic message, status and weather fields are decoded. Ambiguous Mic-E positions and Mic-E device identification remain open. TOCALL lookup uses an offline registry snapshot; an OpenBeacon allocation has been requested.
+- **Release work:** GPS hardware, persistent regional maps, installer packaging, other desktop platforms, full history controls, offline and error-state verification, map and symbol distribution rights, and broader hardware testing remain open. See the milestones below for the full scope; individual older checklist notes may contain historical context.
 
 ### Groundside reuse assessment
 
@@ -59,12 +61,13 @@ After the first release, finish the broader product scope with telemetry, object
 **Goal:** establish the complete main workspace and navigation before expanding functionality.
 
 - [ ] Design the main map workspace, compact navigation, connection/status strip, station details panel, and layout for laptop and high-DPI displays.
-- [ ] Create navigation for Map, Stations, Messages, Weather, Packets, Station, and Settings. Provide useful empty, loading, error, and offline states; clearly mark features that are not connected yet.
-- [ ] Finish the existing compact two-line recent-packet strip above the map, with a clear source label and selectable RF-only, APRS-IS-only, or all-source view. The filter affects the strip, not reception or eventual stored history. Connect the strip and View packet action to a real full packet monitor; show an honest waiting state before a source is connected.
-- [ ] Follow the operating-system light/dark theme by default, with optional Light and Dark overrides and matching map styles. Keep the station details panel closed when no station is selected; place callsign search in the Stations view.
+- [x] Create navigation for Map, Stations, Messages, Weather, Traffic Monitor, Station, and Settings.
+- [ ] Verify useful empty, loading, error, and offline states across the new views in the desktop app; clearly mark features that are not connected yet.
+- [ ] Finish the existing compact two-line recent-packet strip above the map, with a clear source label and selectable RF-only, APRS-IS-only, or all-source view. The filter affects the strip, not reception or eventual stored history. When RF arrives, visually highlight it and hold it in the two-line strip briefly so busy APRS-IS traffic does not immediately displace it; preserve every received packet in the normal monitor/history independently. Choose and expose a sensible hold duration during RF implementation. The strip and View packet action open a single-packet inspector; the session Traffic Monitor provides a separate packet list; show an honest waiting state before a source is connected.
+- [x] Follow the operating-system light/dark theme by default, with optional Light and Dark overrides and matching map styles. Keep the station details panel closed when no station is selected; place callsign search in the Stations view.
 - [ ] Add map pan/zoom controls, scale, coordinates, layer visibility, station selection, decluttering, and readable symbol/label behavior.
-- [ ] Provide station list, callsign search, filtering, station details, and clear last-seen and source indicators. The same selection should stay synchronized between map and list.
-- [ ] Build settings screens for map sources, aprs.fi, APRS-IS, radio/TNC, identity, GPS, and display. Save only settings needed by implemented features; show later settings as unavailable until functional.
+- [ ] Provide station list, callsign search, filtering, station details, and clear last-seen and source indicators. The same selection should stay synchronized between map and list. When stations with different SSIDs overlap, provide a clear way to select each station. Consider a combined details view for related stations at the same location, such as weather and another data source, while retaining each SSID, source, observation time, and independent reports; never assume a shared callsign or nearby position proves they are the same station.
+- [ ] Build settings screens for map sources, aprs.fi, APRS-IS, radio/TNC, identity, GPS, and display, including a persistent imperial/metric units switch for distances, speed, temperature, pressure, and rainfall where applicable. Save only settings needed by implemented features; show later settings as unavailable until functional.
 - [ ] Restore window state, map view, and relevant display preferences on restart. Support keyboard navigation, readable contrast, scalable text, and accessible control labels.
 - [ ] Validate against the reference performance scenarios while the panels and large lists are visible; virtualize long lists and batch map updates.
 
@@ -89,8 +92,8 @@ After the first release, finish the broader product scope with telemetry, object
 
 **Goal:** make the chosen world/region/online map strategy usable without technical setup.
 
-- [ ] Verify the existing zoom-6 world overview, local style, fonts, icons, attribution, build provenance, and distribution licenses; bundle them reproducibly. Measure actual installer and installed sizes.
-- [ ] Define a catalog of regions, including contiguous US, coverage boundaries, zoom range, expected download and installed size, data version, license, and checksum. Show gaps before download.
+- [ ] Verify the zoom-6 world overview and a Detroit-area sample through zoom 12, local style, fonts, icons, attribution, build provenance, and distribution licenses; bundle them reproducibly. Center a clean installation on Detroit and restore saved views thereafter. Measure actual installer and installed sizes. The current local Detroit sample is about 5.4 MiB and reaches zoom 13; produce or verify the intended zoom-12 sample rather than assuming it matches.
+- [ ] Build a map configurator that lets the user choose coverage, detail level, offline downloads and storage location, or online maps. Define a catalog of regions, including contiguous US, coverage boundaries, zoom range, expected download and installed size, data version, license, and checksum. Show gaps before download.
 - [ ] **Near-term:** persist the selected local regional pack across restarts without loading the whole archive into memory; handle moved or missing files and fall back to the world overview. Verify on Windows, macOS, and Linux.
 - [ ] Add optional downloads with progress, cancellation, resume/retry where supported, integrity validation, disk-space checks, storage-location choice, updates, and removal. Import existing compatible packs.
 - [ ] Combine the world overview with one or more regional packs without seams or misleading missing detail; test borders, overlapping packs, differing versions, and missing coverage.
@@ -101,12 +104,14 @@ After the first release, finish the broader product scope with telemetry, object
 
 ## Milestone 4 — Radio receive: TS-2000X and additional TNCs
 
+See [KISS and Kenwood TNC research](KISS_TNC_RESEARCH.md) for protocol, model-specific setup, Dire Wolf correction, and hardware verification notes.
+
 **Goal:** receive actual RF traffic on the primary station and retain an adapter model for other hardware.
 
 - [ ] Document the actual TS-2000X soundcard, cabling, PTT, port configuration, and internal TNC capabilities/modes from the setup and device documentation. Do not assume that the internal TNC exposes KISS or another particular interface until confirmed.
-- [ ] Integrate the imported Groundside KISS framing and AX.25 UI decoder; evaluate its TCP receive architecture against OpenBeacon’s needs. Implement and test a Dire Wolf adapter, beginning with receive over network KISS. Configure and observe the external process; do not require bundling it.
-- [ ] Add serial KISS where supported and identify whether the TS-2000X internal TNC needs a separate protocol adapter or configuration. Add that adapter only after confirming its actual interface.
-- [ ] Show connection state, source name, port, receive counts, errors, and reconnect behavior. Support multiple sources without losing provenance.
+- [ ] Integrate the imported Groundside KISS framing and AX.25 UI decoder; evaluate its TCP receive architecture against OpenBeacon’s needs. Implement and test a bundled Dire Wolf adapter, beginning with receive over network KISS. OpenBeacon manages the modem so users do not need a separate installation. A Linux x86-64 receive-only sidecar and initial controls exist. The owner’s 88-second APRS recording produced seven KISS frames, matching Groundside’s seven unrepaired Dire Wolf reference frames; the OpenBeacon packet core decoded positions from all seven. Verify desktop event/display and live hardware operation, packaging, and Windows and macOS sidecars.
+- [ ] Validate the new receive-only serial and TCP KISS adapters on supported platforms and actual TNCs. TS-2000X guidance covers KISS and native text monitoring. With the owner, Menu 55 enabled and a dummy load connected, native monitoring yielded three real TNC2 text lines decoded by the shared APRS core; desktop integration, KISS mode, FCS behavior and CAT ownership remain to be verified. The app sends no KISS setup or mode commands.
+- [ ] Show connection state, source name, port, receive counts, errors, and reconnect behavior. Support multiple sources without losing provenance. Highlight newly received RF packets in the recent-packet strip and hold them briefly even during a busy APRS-IS stream; verify filtering, multiple RF arrivals, and normal history retention.
 - [ ] Receive real packets from the TS-2000X soundcard/Dire Wolf path and the internal TNC path where supported. Compare displayed packets with a known monitor and test disconnect/reconnect.
 - [ ] Test additional owner-provided TNCs, baud rates, malformed frames, fragmented frames, duplicate packets, and long-running reception.
 
@@ -145,6 +150,7 @@ After the first release, finish the broader product scope with telemetry, object
 - [ ] Implement APRS packet encoding and a bounded transmit queue with a visible selected interface/path, packet preview, state, and logs.
 - [ ] Default each transmit path to disabled; require explicit operator enabling. Reconnects and configuration changes must not silently enable transmission.
 - [ ] Add manual beacon and one-shot position transmission first, followed by periodic and movement-aware scheduling with explicit pause/stop controls.
+- [ ] When an RF transmission is later heard back through a digipeater, correlate it with the sent frame and provide clear feedback identifying the digipeater and time; avoid treating local echo, unrelated traffic, or duplicate receptions as proof. Preserve source and path, and test with simulated and real TNCs.
 - [ ] Implement callsign-to-callsign APRS messaging with message IDs, acknowledgements, retry limits, pending/delivered/failed states, and history. Clarify that transport acknowledgement is not a guarantee a person read a message.
 - [ ] Add APRS-IS sending only after authentication and routing behavior are verified; keep it visibly distinct from RF. aprs.fi lookup does not transmit packets.
 - [ ] Test encoders and retry/queue behavior with fixtures and simulated adapters first; then test the TS-2000X soundcard and confirmed internal-TNC transmit paths with the operator. Record packet route and actual outcome.
@@ -205,9 +211,10 @@ After the first release, finish the broader product scope with telemetry, object
 
 ## Immediate work order
 
-1. Validate the shared Rust APRS decoder against independent/live fixtures; complete ambiguous Mic-E and remaining packet families, preserve raw data end to end, and expand meaningful protocol tests.
-2. Build the Stations list and full packet monitor/inspector; synchronize map selection and expose source, timestamp, decoding warnings, and raw packet data. Keep the map responsive under measured packet bursts.
-3. Make selection of a local regional map pack persistent, retain offline operation, and verify on-demand access in a packaged build. Continue the broader pack manager and online basemap separately.
-4. Implement receive-only Dire Wolf TCP KISS using the appropriate Groundside components or equivalent; test the TS-2000X soundcard setup and then investigate its internal TNC with explicit serial ownership and operator-led procedures.
-5. Add GPS, local weather, controlled transmission, messaging, and WeatherLink-to-RF as their dependencies are proven. Optional aprs.fi lookups can be scheduled independently and do not gate radio work.
-6. Complete cross-platform tests, numerical acceptance targets, map/symbol and third-party licensing, documentation, installers, and release hardening; then pursue the broader and advanced features above.
+1. Verify SQLite restart, retention, error recovery, and the one-shot APRS-IS beacon with a simulated server and operator-led live test. Verify the new Stations, Messages, Weather, and Traffic Monitor views in the desktop app with representative live or simulated packets. Check navigation, filtering, pause, keyboard access, NWS success/failure and location changes, and busy-feed responsiveness. Fix any issues found.
+2. Validate the shared Rust APRS decoder against independent/live fixtures; complete ambiguous Mic-E and remaining packet families, preserve raw data end to end, and expand meaningful protocol tests. Confirm APRS-IS filter behavior for messages addressed to the operator.
+3. Add persistent local packet, station and message history with retention limits and migrations. Improve list scalability and avoid losing access to older matching results.
+4. Persist the selected local regional map pack, retain offline operation, and verify on-demand access in a packaged build. Continue the broader pack manager and online basemap separately.
+5. Implement receive-only Dire Wolf TCP KISS and test the TS-2000X soundcard setup; then investigate its internal TNC with explicit serial ownership and operator-led procedures. Implement and verify RF highlighting and hold behavior.
+6. Add GPS, controlled transmission, messaging acknowledgements, and WX-Link-to-RF as dependencies are proven. Optional aprs.fi lookups can be scheduled independently.
+7. Complete cross-platform tests, acceptance targets, licensing, documentation, installers, and release hardening; then pursue the broader and advanced features above.
