@@ -182,6 +182,9 @@ export const desktop = {
     ),
   readMapRange: (name: string, offset: number, length: number) =>
     invoke<number[]>("read_map_range", { name, offset, length }),
+  chooseLocalMap: () => invoke<string | null>("choose_local_map"),
+  readLocalMap: (offset: number, length: number) =>
+    invoke<number[]>("read_local_map", { offset, length }),
   loadSettings: () => invoke<ConnectionSettings | null>("load_settings"),
   saveSettings: (settings: ConnectionSettings) =>
     invoke<void>("save_settings", { settings }),

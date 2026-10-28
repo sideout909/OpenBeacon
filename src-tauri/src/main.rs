@@ -342,16 +342,20 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             app.manage(Connection::default());
             app.manage(gps::Gps::default());
             app.manage(weather::WeatherState::default());
             app.manage(tnc::Tnc::default());
             app.manage(maps::MapDownload::default());
+            app.manage(maps::LocalMap::default());
             app.manage(tnc::Modem::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            maps::choose_local_map,
+            maps::read_local_map,
             weather::save_weather_credentials,
             weather::weather_station_saved,
             weather::clear_weather_credentials,

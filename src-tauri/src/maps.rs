@@ -5,6 +5,59 @@ use std::{
     path::Path,
 };
 use tauri::Manager;
+use tauri_plugin_dialog::DialogExt;
+
+#[derive(Default)]
+pub struct LocalMap(std::sync::Mutex<Option<std::path::PathBuf>>);
+
+#[tauri::command]
+pub async fn choose_local_map(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = app
+            .path()
+            .app_data_dir()
+            .map_err(|e| e.to_string())?
+            .join("maps");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let Some(selected) = app
+            .dialog()
+            .file()
+            .set_directory(&dir)
+            .add_filter("PMTiles map", &["pmtiles"])
+            .blocking_pick_file()
+        else {
+            return Ok(None);
+        };
+        let path = selected.into_path().map_err(|e| e.to_string())?;
+        let name = path
+            .file_name()
+            .ok_or("Invalid map filename")?
+            .to_string_lossy()
+            .into_owned();
+        *app.state::<LocalMap>()
+            .0
+            .lock()
+            .map_err(|e| e.to_string())? = Some(path);
+        Ok(Some(name))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn read_local_map(
+    state: tauri::State<'_, LocalMap>,
+    offset: u64,
+    length: usize,
+) -> Result<Vec<u8>, String> {
+    let path = state
+        .0
+        .lock()
+        .map_err(|e| e.to_string())?
+        .clone()
+        .ok_or("No map selected")?;
+    read_range(&path, offset, length)
+}
 
 const MAX_RANGE: usize = 8 * 1024 * 1024;
 

@@ -31,7 +31,7 @@ import { addBasemap, removeBasemap, updateMapColors } from "./basemap";
 import { appShell } from "./shell";
 import * as maplibre from "maplibre-gl";
 import mapWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
-import { Protocol, PMTiles, FileSource } from "pmtiles";
+import { Protocol, PMTiles } from "pmtiles";
 import {
   desktop,
   type ConnectionSettings,
@@ -2102,17 +2102,19 @@ function startApp() {
   const mapSettingsDialog = el<HTMLDialogElement>("map-settings-dialog");
   el("settings-button").onclick = () => mapSettingsDialog.showModal();
   el("close-map-settings").onclick = () => mapSettingsDialog.close();
-  el<HTMLInputElement>("pack").addEventListener("change", async (e) => {
-    const input = e.target as HTMLInputElement;
-    const file = input.files?.[0];
-    input.value = "";
-    if (!file) return;
+  el<HTMLButtonElement>("pack").onclick = async () => {
     el("map-import-status").textContent = "";
     try {
+      const filename = await desktop.chooseLocalMap();
+      if (!filename) return;
       const key = `regional-${++localPackId}`;
-      const source = new FileSource(file);
-      source.getKey = () => key;
-      const archive = new PMTiles(source);
+      const archive = new PMTiles({
+        getKey: () => key,
+        getBytes: async (offset: number, length: number) => ({
+          data: new Uint8Array(await desktop.readLocalMap(offset, length))
+            .buffer,
+        }),
+      });
       const header = await archive.getHeader();
       if (header.tileType !== 1)
         throw new Error("Choose a vector PMTiles file.");
@@ -2127,15 +2129,15 @@ function startApp() {
         { padding: 45, maxZoom: 12 },
       );
       el("regional-name").textContent =
-        `${file.name} · zoom ${header.minZoom}–${header.maxZoom}`;
-      el("map-state").textContent = `Offline map · ${file.name}`;
+        `${filename} · zoom ${header.minZoom}–${header.maxZoom}`;
+      el("map-state").textContent = `Offline map · ${filename}`;
       el("map-import-status").textContent = "Map opened for this session.";
       el("map-message").hidden = true;
     } catch (error) {
       el("map-import-status").textContent =
         `Unable to open map: ${error instanceof Error ? error.message : String(error)}`;
     }
-  });
+  };
 
   const dialog = el<HTMLDialogElement>("connect-dialog");
   const connectForm = el<HTMLFormElement>("connect-form");
