@@ -52,8 +52,8 @@ export const desktop = {
     invoke<WeatherObservation>("read_peet_weather", { port, lat, lon }),
   sendWeather: (callsign: string, route: string, path: string) =>
     invoke<string>("send_weather", { callsign, route, path }),
-  connectGps: (port: string, baud: number) =>
-    invoke<number>("connect_gps", { port, baud }),
+  connectGps: (source: string, endpoint: string, baud: number) =>
+    invoke<number>("connect_gps", { source, endpoint, baud }),
   disconnectGps: () => invoke<void>("disconnect_gps"),
   onGpsStatus: (
     handler: (event: {

@@ -159,11 +159,22 @@ pub async fn download_region_map(
     let cancel = state.cancel.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let result = (|| -> Result<(), String> {
-            #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-            return Err("Map downloading is currently available on Linux x86-64 only.".into());
-            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            #[cfg(not(all(
+                any(target_os = "linux", target_os = "windows"),
+                target_arch = "x86_64"
+            )))]
+            return Err(
+                "Map downloading is currently available on Linux and Windows x86-64 only.".into(),
+            );
+            #[cfg(all(
+                any(target_os = "linux", target_os = "windows"),
+                target_arch = "x86_64"
+            ))]
             {
+                #[cfg(target_os = "linux")]
                 use std::os::unix::process::CommandExt;
+                #[cfg(target_os = "windows")]
+                use std::os::windows::process::CommandExt;
                 let dir = app
                     .path()
                     .app_data_dir()
@@ -176,17 +187,36 @@ pub async fn download_region_map(
                     serde_json::to_vec(&geometry).map_err(|e| e.to_string())?,
                 )
                 .map_err(|e| e.to_string())?;
-                let output = tempfile::NamedTempFile::new_in(&dir).map_err(|e| e.to_string())?;
-                let binary = app
-                    .path()
-                    .resource_dir()
+                let output = tempfile::NamedTempFile::new_in(&dir)
                     .map_err(|e| e.to_string())?
-                    .join("pmtiles-linux-x86_64.gz");
-                let dev =
-                    Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/pmtiles-linux-x86_64.gz");
-                let binary = if binary.is_file() { binary } else { dev };
-                let staged_path = stage_extractor(&binary, &dir)?;
-                let output_path = output.path().to_owned();
+                    .into_temp_path();
+                #[cfg(target_os = "linux")]
+                let staged_path = {
+                    let binary = app
+                        .path()
+                        .resource_dir()
+                        .map_err(|e| e.to_string())?
+                        .join("pmtiles-linux-x86_64.gz");
+                    let dev = Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("resources/pmtiles-linux-x86_64.gz");
+                    stage_extractor(if binary.is_file() { &binary } else { &dev }, &dir)?
+                };
+                #[cfg(target_os = "windows")]
+                let staged_path = {
+                    let binary = app
+                        .path()
+                        .resource_dir()
+                        .map_err(|e| e.to_string())?
+                        .join("pmtiles-windows-x86_64.exe");
+                    if !binary.is_file() {
+                        return Err(
+                            "Windows map downloader is missing from the application directory."
+                                .into(),
+                        );
+                    }
+                    binary
+                };
+                let output_path = output.to_path_buf();
                 let mut command = std::process::Command::new(&staged_path);
                 command
                     .arg("extract")
@@ -197,7 +227,11 @@ pub async fn download_region_map(
                     .arg("--download-threads=2")
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null());
+                #[cfg(target_os = "windows")]
+                command.creation_flags(0x08000000);
+                #[cfg(target_os = "linux")]
                 let parent = std::process::id();
+                #[cfg(target_os = "linux")]
                 unsafe {
                     command.pre_exec(move || {
                         if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
@@ -214,6 +248,7 @@ pub async fn download_region_map(
                 let mut child = command
                     .spawn()
                     .map_err(|e| format!("Could not start map downloader: {e}"))?;
+                #[cfg(target_os = "linux")]
                 drop(staged_path);
                 loop {
                     if cancel.load(Ordering::SeqCst) {

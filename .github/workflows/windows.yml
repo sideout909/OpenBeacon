@@ -1,0 +1,50 @@
+name: Windows test build
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - name: Prepare build resources
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force public/maps | Out-Null
+          New-Item -ItemType File -Force public/maps/world-z6.pmtiles,public/maps/michigan-lower-z12.pmtiles | Out-Null
+      - name: Test
+        run: npm test
+      - name: Build Windows executable
+        run: npm run tauri build -- --no-bundle
+      - name: Assemble test archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = 'go-pmtiles.zip'
+          Invoke-WebRequest 'https://github.com/protomaps/go-pmtiles/releases/download/v1.31.2/go-pmtiles_1.31.2_Windows_x86_64.zip' -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLower() -ne 'a658baa4d7e55020aef6ca17bd9ff9faa1582671266b36f58c52db0ac8e785a1') { throw 'Map downloader checksum mismatch' }
+          Expand-Archive $archive -DestinationPath pmtiles-download
+          New-Item -ItemType Directory -Force openbeacon-windows-x86_64/maps | Out-Null
+          Copy-Item src-tauri/target/release/openbeacon-map-test.exe openbeacon-windows-x86_64/OpenBeacon.exe
+          Copy-Item pmtiles-download/pmtiles.exe openbeacon-windows-x86_64/pmtiles-windows-x86_64.exe
+          Copy-Item README.md,USER_GUIDE.md,LICENSE,THIRD-PARTY-NOTICES.md openbeacon-windows-x86_64/
+          Copy-Item -Recurse third-party openbeacon-windows-x86_64/
+          & ./openbeacon-windows-x86_64/pmtiles-windows-x86_64.exe version
+          if ($LASTEXITCODE -ne 0) { throw 'Map downloader did not run' }
+          Compress-Archive -Path openbeacon-windows-x86_64 -DestinationPath openbeacon-windows-x86_64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openbeacon-windows-x86_64
+          path: openbeacon-windows-x86_64.zip
+          if-no-files-found: error

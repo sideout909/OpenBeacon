@@ -1,0 +1,36 @@
+name: Linux test build
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev cmake
+      - run: npm ci
+      - run: mkdir -p public/maps && touch public/maps/world-z6.pmtiles public/maps/michigan-lower-z12.pmtiles
+      - run: scripts/build-direwolf-linux.sh
+      - run: npm run check
+      - run: npm run tauri build -- --no-bundle
+      - name: Assemble test archive
+        run: |
+          mkdir -p openbeacon-linux-x86_64/maps
+          cp src-tauri/target/release/openbeacon-map-test openbeacon-linux-x86_64/openbeacon
+          cp src-tauri/resources/direwolf-linux-x86_64 src-tauri/resources/pmtiles-linux-x86_64.gz openbeacon-linux-x86_64/
+          cp README.md USER_GUIDE.md LICENSE THIRD-PARTY-NOTICES.md openbeacon-linux-x86_64/
+          cp -a third-party openbeacon-linux-x86_64/
+          tar -czf openbeacon-linux-x86_64.tar.gz openbeacon-linux-x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openbeacon-linux-x86_64
+          path: openbeacon-linux-x86_64.tar.gz
+          if-no-files-found: error

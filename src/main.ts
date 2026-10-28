@@ -1158,6 +1158,7 @@ function startApp() {
   el("refresh-weather").onclick = () => void refreshForecast();
   let weatherReady = false;
   let weatherBeaconActive = false;
+  let weatherBeaconPaused = false;
   let weatherBeaconBusy = false;
   let weatherBeaconGeneration = 0;
   let weatherBeaconTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1290,6 +1291,61 @@ function startApp() {
   const wxInterval = el<HTMLInputElement>("weather-beacon-interval");
   const wxSource = el<HTMLSelectElement>("weather-beacon-source");
   const wxRoute = el<HTMLSelectElement>("weather-tx-route");
+  const wxPath = el<HTMLSelectElement>("weather-rf-path");
+  const wxCustomPath = el<HTMLInputElement>("weather-custom-path");
+  function setWeatherPath(path: string) {
+    const preset = Array.from(wxPath.options).some(
+      (option) => option.value === path && option.value !== "custom",
+    );
+    wxPath.value = preset ? path : "custom";
+    wxCustomPath.value = preset ? "" : path;
+    el("weather-custom-path-label").hidden = preset;
+  }
+  wxRoute.value =
+    localStorage.getItem("openbeacon-weather-route") === "rf" ? "rf" : "ip";
+  wxSource.value =
+    localStorage.getItem("openbeacon-weather-source") === "peet"
+      ? "peet"
+      : "wu";
+  const savedWxPath = localStorage.getItem("openbeacon-weather-rf-path");
+  if (savedWxPath !== null) setWeatherPath(savedWxPath);
+  function syncWeatherRoute() {
+    el("weather-rf-path-label").hidden = wxRoute.value !== "rf";
+    localStorage.setItem("openbeacon-weather-route", wxRoute.value);
+  }
+  wxRoute.onchange = syncWeatherRoute;
+  wxSource.onchange = () =>
+    localStorage.setItem("openbeacon-weather-source", wxSource.value);
+  syncWeatherRoute();
+  function weatherPath(): string | null {
+    const path = (wxPath.value === "custom" ? wxCustomPath.value : wxPath.value)
+      .trim()
+      .toUpperCase();
+    if (
+      path &&
+      (path.length > 71 ||
+        path.split(",").length > 8 ||
+        !path
+          .split(",")
+          .every((part) => /^[A-Z0-9]{1,6}(?:-(?:[0-9]|1[0-5]))?$/.test(part)))
+    ) {
+      el("weather-send-status").textContent =
+        "Enter up to 8 valid comma-separated RF path aliases or callsigns.";
+      wxScheduleStatus.textContent =
+        "Enter up to 8 valid comma-separated RF path aliases or callsigns.";
+      return null;
+    }
+    if (wxPath.value === "custom") wxCustomPath.value = path;
+    localStorage.setItem("openbeacon-weather-rf-path", path);
+    return path;
+  }
+  wxPath.onchange = () => {
+    el("weather-custom-path-label").hidden = wxPath.value !== "custom";
+    if (wxPath.value !== "custom") weatherPath();
+  };
+  wxCustomPath.onchange = () => {
+    weatherPath();
+  };
   const wxStart = el<HTMLButtonElement>("weather-beacon-start");
   const wxStop = el<HTMLButtonElement>("weather-beacon-stop");
   const wxScheduleStatus = el("weather-beacon-status");
@@ -1303,15 +1359,22 @@ function startApp() {
   )
     wxInterval.value = String(storedWxInterval);
   function syncWeatherBeaconControls() {
+    updateBeaconIndicator();
     wxStart.disabled = weatherBeaconActive || weatherBeaconBusy;
     wxStop.disabled = !weatherBeaconActive;
     wxInterval.disabled = weatherBeaconActive;
     wxSource.disabled = weatherBeaconActive;
     wxRoute.disabled = weatherBeaconActive;
+    wxPath.disabled = weatherBeaconActive;
+    wxCustomPath.disabled = weatherBeaconActive;
+    el("weather-beacon-quick").textContent = weatherBeaconActive
+      ? "Stop weather beaconing"
+      : "Start weather beaconing";
     weatherSourceBusy(weatherBeaconBusy);
   }
   function stopWeatherBeacon(message: string) {
     weatherBeaconActive = false;
+    weatherBeaconPaused = false;
     weatherBeaconGeneration++;
     if (weatherBeaconTimer !== null) clearTimeout(weatherBeaconTimer);
     weatherBeaconTimer = null;
@@ -1332,7 +1395,8 @@ function startApp() {
     const source = wxSource.value,
       route = wxRoute.value,
       call = savedCallsign,
-      path = savedRfPath;
+      path = route === "rf" ? weatherPath() : "";
+    if (path === null) return;
     const location = configuredLocation
       ? { lat: configuredLocation.lat, lon: configuredLocation.lon }
       : null;
@@ -1349,13 +1413,13 @@ function startApp() {
     localStorage.setItem("openbeacon-weather-interval", wxInterval.value);
     const generation = ++weatherBeaconGeneration;
     weatherBeaconActive = true;
+    weatherBeaconPaused = false;
     syncWeatherBeaconControls();
     const run = async () => {
       if (!weatherBeaconActive || generation !== weatherBeaconGeneration)
         return;
       if (
         call !== savedCallsign ||
-        path !== savedRfPath ||
         (source === "peet" &&
           (!configuredLocation ||
             configuredLocation.lat !== location?.lat ||
@@ -1381,10 +1445,12 @@ function startApp() {
         if (!weatherBeaconActive || generation !== weatherBeaconGeneration)
           return;
         showSentPacket(raw);
+        weatherBeaconPaused = false;
         wxScheduleStatus.textContent = `Weather packet sent to the selected connection at ${new Date().toLocaleTimeString()}.`;
       } catch (error) {
         if (weatherBeaconActive && generation === weatherBeaconGeneration) {
           resetWeather();
+          weatherBeaconPaused = true;
           wxScheduleStatus.textContent = `Weather beacon paused: ${String(error)} It will check again at the next interval.`;
         }
       } finally {
@@ -1404,11 +1470,9 @@ function startApp() {
     try {
       if (!savedCallsign)
         throw new Error("Set your callsign in My Station first.");
-      const raw = await desktop.sendWeather(
-        savedCallsign,
-        el<HTMLSelectElement>("weather-tx-route").value,
-        savedRfPath,
-      );
+      const path = wxRoute.value === "rf" ? weatherPath() : "";
+      if (path === null) return;
+      const raw = await desktop.sendWeather(savedCallsign, wxRoute.value, path);
       showSentPacket(raw);
       el("weather-send-status").textContent =
         "Weather packet sent to the selected connection.";
@@ -2334,6 +2398,31 @@ function startApp() {
   const gpsPort = el<HTMLSelectElement>("gps-port");
   const gpsCustom = el<HTMLInputElement>("gps-custom");
   const gpsBaud = el<HTMLSelectElement>("gps-baud");
+  const gpsSource = el<HTMLSelectElement>("gps-source");
+  const gpsEndpoint = el<HTMLInputElement>("gps-endpoint");
+  gpsSource.onchange = () => {
+    const source = gpsSource.value;
+    el("gps-serial-options").hidden = source !== "serial";
+    el("gps-network-options").hidden = source === "serial";
+    gpsEndpoint.value =
+      source === "gpsd"
+        ? "127.0.0.1:2947"
+        : source === "udp"
+          ? "0.0.0.0:10110"
+          : "";
+    gpsEndpoint.placeholder =
+      source === "tcp"
+        ? "Phone or receiver IP:port"
+        : source === "udp"
+          ? "0.0.0.0:10110"
+          : "127.0.0.1:2947";
+    el("gps-network-hint").textContent =
+      source === "udp"
+        ? "Listen on this computer's address and port. Configure the phone to send to this computer's IP and port."
+        : source === "tcp"
+          ? "Enter the GPS server's IP address and port."
+          : "Connect to a running gpsd service; receiver support depends on gpsd and the device.";
+  };
   function freshGps(): GpsFix | null {
     return gpsFix &&
       Date.now() - gpsFix.receivedAt >= 0 &&
@@ -2368,16 +2457,25 @@ function startApp() {
       el("gps-detail").textContent = String(error);
     });
   el("gps-connect").onclick = async () => {
-    const port =
-      gpsPort.value === "custom" ? gpsCustom.value.trim() : gpsPort.value;
-    if (!port) {
-      el("gps-detail").textContent = "Choose a GPS serial port.";
+    const source = gpsSource.value;
+    const endpoint =
+      source === "serial"
+        ? gpsPort.value === "custom"
+          ? gpsCustom.value.trim()
+          : gpsPort.value
+        : gpsEndpoint.value.trim();
+    if (!endpoint) {
+      el("gps-detail").textContent = "Choose a GPS port or enter an address.";
       return;
     }
     gpsWanted = true;
     gpsFix = null;
     try {
-      gpsGeneration = await desktop.connectGps(port, Number(gpsBaud.value));
+      gpsGeneration = await desktop.connectGps(
+        source,
+        endpoint,
+        Number(gpsBaud.value),
+      );
     } catch (error) {
       gpsWanted = false;
       el("gps-detail").textContent = String(error);
@@ -2422,7 +2520,6 @@ function startApp() {
     clearTimeout(beaconTimer);
     el("beacon-schedule-state").textContent = reason;
     el("mobile-beacon-state").textContent = reason;
-    el("tx-button").querySelector("small")!.textContent = "APRS-IS";
     updateBeaconMode();
   }
   async function sendConfiguredBeacon(fix?: GpsFix) {
@@ -2509,8 +2606,6 @@ function startApp() {
       }
       localStorage.setItem("openbeacon-beacon-interval", intervalInput.value);
       beaconScheduleActive = true;
-      el("tx-button").querySelector("small")!.textContent =
-        `Auto · ${beaconRouteLabel()}`;
       updateBeaconMode();
       void scheduledBeacon(generation);
     } catch (error) {
@@ -2614,8 +2709,6 @@ function startApp() {
       beaconScheduleActive = true;
       mobileActive = true;
       lastMobileTime = 0;
-      el("tx-button").querySelector("small")!.textContent =
-        `Mobile · ${beaconRouteLabel()}`;
       updateBeaconMode();
       void sendMobileFix(generation, fix);
     } catch (error) {
@@ -2687,6 +2780,18 @@ function startApp() {
     await startAutoBeacon();
     if (!beaconScheduleActive) openBeaconSettings();
   };
+  el("weather-beacon-quick").onclick = () => {
+    closeBeaconMenu();
+    if (weatherBeaconActive) {
+      wxStop.click();
+      return;
+    }
+    wxStart.click();
+    if (!weatherBeaconActive) {
+      el<HTMLDetailsElement>("weather-station-details").open = true;
+      el("weather-button").click();
+    }
+  };
   el("beacon-settings").onclick = () => {
     closeBeaconMenu();
     openBeaconSettings();
@@ -2700,7 +2805,27 @@ function startApp() {
     updateBeaconMode();
     beaconDialog.showModal();
   }
+  function updateBeaconIndicator() {
+    const statuses: string[] = [];
+    if (beaconScheduleActive)
+      statuses.push(
+        `${mobileActive ? "Mobile" : "Auto"} · ${beaconRouteLabel()}`,
+      );
+    if (weatherBeaconActive)
+      statuses.push(
+        weatherBeaconPaused
+          ? "Weather paused"
+          : `Weather · ${wxRoute.value === "rf" ? "RF TNC" : "APRS-IS"}`,
+      );
+    el("tx-button").querySelector("small")!.textContent =
+      statuses.join(" / ") || "Stopped";
+    el("tx-button").querySelector("i")!.className =
+      beaconScheduleActive || (weatherBeaconActive && !weatherBeaconPaused)
+        ? "green"
+        : "amber";
+  }
   function updateBeaconMode() {
+    updateBeaconIndicator();
     el("beacon-quick").textContent = beaconScheduleActive
       ? "Stop automatic beaconing"
       : "Start automatic beaconing";
@@ -3063,6 +3188,8 @@ function startApp() {
     savedSymbol = settings.symbol || "/-";
     savedComment = settings.beacon_comment ?? "";
     savedRfPath = settings.rf_path ?? "WIDE2-2";
+    if (localStorage.getItem("openbeacon-weather-rf-path") === null)
+      setWeatherPath(savedRfPath);
     chosenSymbol = savedSymbol;
     chosenTable = symbolCells(chosenSymbol)?.table ?? 0;
     setIdentityFields(savedCallsign);
