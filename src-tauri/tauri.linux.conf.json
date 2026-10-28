@@ -1,0 +1,23 @@
+{
+  "bundle": {
+    "active": true,
+    "targets": [
+      "appimage"
+    ],
+    "createUpdaterArtifacts": true,
+    "resources": {
+      "resources/pmtiles-linux-x86_64.gz": "pmtiles-linux-x86_64.gz",
+      "resources/direwolf-linux-x86_64": "direwolf-linux-x86_64",
+      "../README.md": "README.md",
+      "../USER_GUIDE.md": "USER_GUIDE.md",
+      "../LICENSE": "LICENSE",
+      "../THIRD-PARTY-NOTICES.md": "THIRD-PARTY-NOTICES.md",
+      "../third-party/": "third-party/",
+      "../public/fonts/OFL.txt": "third-party/fonts/OFL.txt",
+      "../public/aprs-symbols/COPYRIGHT.md": "third-party/aprs-symbols/COPYRIGHT.md",
+      "../src/data/README.md": "third-party/aprs-deviceid/README.md",
+      "../src/data/aprs-deviceid.json": "third-party/aprs-deviceid/aprs-deviceid.json",
+      "../UPDATE_RELEASES.md": "UPDATE_RELEASES.md"
+    }
+  }
+}

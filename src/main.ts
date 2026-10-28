@@ -1,3 +1,13 @@
+import { check as checkUpdate, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { updateBlocked } from "./update-control";
+import {
+  connectionLocation,
+  currentPosition,
+  fixedPosition,
+  freshPosition,
+  type Position,
+} from "./location";
 import { migrateTncSelection, serialModels, type TncKind } from "./tnc-options";
 import {
   smartBeaconDecision,
@@ -54,6 +64,8 @@ function startApp() {
         dialog.close();
     });
   });
+  let updateApplying = false;
+  let messageTransmissions = 0;
   let units: Units =
     localStorage.getItem("openbeacon-units") === "metric"
       ? "metric"
@@ -457,11 +469,11 @@ function startApp() {
     }
   }, 500);
   function distanceAway(lat: number, lon: number): string {
-    if (!configuredLocation) return "—";
-    const meters = new maplibre.LngLat(
-      configuredLocation.lon,
-      configuredLocation.lat,
-    ).distanceTo(new maplibre.LngLat(lon, lat));
+    const location = currentPosition(freshGps(), configuredLocation);
+    if (!location) return "—";
+    const meters = new maplibre.LngLat(location.lon, location.lat).distanceTo(
+      new maplibre.LngLat(lon, lat),
+    );
     const km = meters / 1000;
     return `${(units === "metric" ? km : kmToMiles(km)).toFixed(1)} ${units === "metric" ? "km" : "mi"}`;
   }
@@ -708,21 +720,27 @@ function startApp() {
     return alert;
   }
   async function acknowledgeMessage(packet: DecodedPacket) {
+    if (updateApplying) throw new Error("An update is being installed.");
     if (!messageCanAck(packet) || !packet.message?.id)
       throw new Error("No valid acknowledgement ID or route.");
     if (packet.message.addressee.toUpperCase() !== savedCallsign.toUpperCase())
       throw new Error(
         "The station identity has changed; select the addressed callsign in My Station.",
       );
-    return desktop.sendAprsMessage(
-      savedCallsign,
-      packet.source.toUpperCase(),
-      "",
-      packet.message.id,
-      true,
-      packet.origin === "rf" ? "rf" : "ip",
-      savedRfPath,
-    );
+    messageTransmissions++;
+    try {
+      return await desktop.sendAprsMessage(
+        savedCallsign,
+        packet.source.toUpperCase(),
+        "",
+        packet.message.id,
+        true,
+        packet.origin === "rf" ? "rf" : "ip",
+        savedRfPath,
+      );
+    } finally {
+      messageTransmissions--;
+    }
   }
   async function sendAlertAck(alert: MessageAlert) {
     if (alert.state === "sending" || alert.state === "sent") return;
@@ -757,6 +775,13 @@ function startApp() {
     );
   }
   async function sendMessage(item: SentMessage) {
+    if (updateApplying) {
+      item.state = "error";
+      item.detail = "An update is being installed.";
+      saveOutbox();
+      renderMessages();
+      return;
+    }
     item.state = "sending";
     item.detail = undefined;
     saveOutbox();
@@ -1079,12 +1104,13 @@ function startApp() {
   async function refreshForecast() {
     const generation = ++forecastGeneration;
     const root = el("nws-forecast");
-    if (!configuredLocation) {
+    const location = currentPosition(freshGps(), configuredLocation);
+    if (!location) {
       root.textContent =
-        "Set a manual location using GPS to load a local forecast.";
+        "Set a manual location or connect GPS to load a local forecast.";
       return;
     }
-    const { lat, lon } = configuredLocation;
+    const { lat, lon } = location;
     root.textContent = "Loading NWS forecast…";
     try {
       const fetchJson = async (url: string) => {
@@ -1268,19 +1294,20 @@ function startApp() {
     weatherStatus.textContent =
       "Listening for Ultimeter data for up to 15 seconds…";
     try {
-      if (!configuredLocation)
-        throw new Error(
-          "Set the weather station location in My Station first.",
-        );
+      const location = configuredLocation ?? freshGps();
+      if (!location)
+        throw new Error("Set a manual location or connect GPS first.");
       const port =
         peetPorts.value === "custom"
           ? el<HTMLInputElement>("weather-peet-custom").value.trim()
           : peetPorts.value;
       const obs = await desktop.readPeetWeather(
         port,
-        configuredLocation.lat,
-        configuredLocation.lon,
+        location.lat,
+        location.lon,
       );
+      if (!configuredLocation && !freshGps())
+        throw new Error("GPS fix became stale while reading weather.");
       showWeatherObservation(obs);
     } catch (error) {
       weatherStatus.textContent = String(error);
@@ -1386,6 +1413,10 @@ function startApp() {
       "Weather beacon stopped. A packet already handed to the TNC may still transmit.",
     );
   wxStart.onclick = () => {
+    if (updateApplying) {
+      wxScheduleStatus.textContent = "An update is being installed.";
+      return;
+    }
     if (weatherBeaconActive || weatherBeaconBusy) return;
     if (!wxInterval.value || !wxInterval.reportValidity()) return;
     if (!savedCallsign) {
@@ -1397,9 +1428,8 @@ function startApp() {
       call = savedCallsign,
       path = route === "rf" ? weatherPath() : "";
     if (path === null) return;
-    const location = configuredLocation
-      ? { lat: configuredLocation.lat, lon: configuredLocation.lon }
-      : null;
+    const weatherPosition = fixedPosition(configuredLocation, freshGps());
+    const location = weatherPosition?.position ?? null;
     const port =
       peetPorts.value === "custom"
         ? el<HTMLInputElement>("weather-peet-custom").value.trim()
@@ -1421,12 +1451,14 @@ function startApp() {
       if (
         call !== savedCallsign ||
         (source === "peet" &&
-          (!configuredLocation ||
-            configuredLocation.lat !== location?.lat ||
-            configuredLocation.lon !== location?.lon))
+          ((!weatherPosition?.requiresGps &&
+            (!configuredLocation ||
+              configuredLocation.lat !== location?.lat ||
+              configuredLocation.lon !== location?.lon)) ||
+            (weatherPosition?.requiresGps && !freshGps())))
       ) {
         stopWeatherBeacon(
-          "Weather beacon stopped because My Station settings changed. Start it again to use the new settings.",
+          "Weather beacon stopped because the station location, GPS fix, or callsign changed. Start it again to use the current settings.",
         );
         return;
       }
@@ -1440,6 +1472,8 @@ function startApp() {
             : await desktop.readPeetWeather(port, location!.lat, location!.lon);
         if (!weatherBeaconActive || generation !== weatherBeaconGeneration)
           return;
+        if (source === "peet" && weatherPosition?.requiresGps && !freshGps())
+          throw new Error("GPS fix became stale while reading weather.");
         showWeatherObservation(obs);
         const raw = await desktop.sendWeather(call, route, path);
         if (!weatherBeaconActive || generation !== weatherBeaconGeneration)
@@ -1464,6 +1498,10 @@ function startApp() {
     void run();
   };
   el("weather-send").onclick = async () => {
+    if (updateApplying) {
+      el("weather-send-status").textContent = "An update is being installed.";
+      return;
+    }
     if (!weatherReady) return;
     weatherBeaconBusy = true;
     syncWeatherBeaconControls();
@@ -1925,27 +1963,53 @@ function startApp() {
   regionChoice.onchange = updateRegionSelection;
   el("open-map-configurator").onclick = openMapConfigurator;
   el("close-map-config").onclick = () => mapConfigDialog.close();
+  let activeMapDownload: string | null = null;
+  let mapDownloadSequence = 0;
+  const mapDownloadProgress = el<HTMLProgressElement>("map-download-progress");
   el("cancel-map-download").onclick = () => {
+    activeMapDownload = null;
+    mapDownloadProgress.removeAttribute("value");
     void desktop.cancelMapDownload();
     el("map-download-status").textContent = "Canceling download…";
   };
-  void desktop.onMapDownloadProgress((bytes) => {
+  void desktop.onMapDownloadProgress(({ requestId, percent }) => {
+    if (
+      requestId !== activeMapDownload ||
+      !Number.isFinite(percent) ||
+      percent < 0 ||
+      percent > 99
+    )
+      return;
+    mapDownloadProgress.value = percent;
     el("map-download-status").textContent =
-      `Downloading… ${(bytes / 1048576).toFixed(1)} MB saved so far`;
+      `Downloading map tiles… ${percent}%`;
   });
   el("download-map").onclick = async () => {
+    if (updateApplying) {
+      el("map-download-status").textContent = "An update is being installed.";
+      return;
+    }
     const region = regions[Number(regionChoice.value)];
     if (!region) return;
     const download = el<HTMLButtonElement>("download-map"),
       cancel = el<HTMLButtonElement>("cancel-map-download");
     download.disabled = true;
     cancel.disabled = false;
+    const requestId = String(++mapDownloadSequence);
+    activeMapDownload = requestId;
+    mapDownloadProgress.hidden = false;
+    mapDownloadProgress.removeAttribute("value");
     el("map-download-status").textContent = `Preparing ${region.name}…`;
     try {
       await desktop.downloadRegionMap(
         region.geometry,
         Number(el<HTMLSelectElement>("map-detail").value),
+        requestId,
       );
+      activeMapDownload = null;
+      mapDownloadProgress.removeAttribute("value");
+      el("map-download-status").textContent =
+        "Checking and opening the downloaded map…";
       localStorage.setItem("openbeacon-map-region", region.name);
       localStorage.setItem("openbeacon-map-mode", "downloaded");
       localStorage.setItem("openbeacon-map-setup", "done");
@@ -1957,11 +2021,14 @@ function startApp() {
         ],
         { padding: 45, maxZoom: 10 },
       );
+      mapDownloadProgress.value = 100;
       el("map-download-status").textContent =
         `${region.name} downloaded and selected.`;
     } catch (error) {
+      mapDownloadProgress.hidden = true;
       el("map-download-status").textContent = String(error);
     } finally {
+      activeMapDownload = null;
       download.disabled = false;
       cancel.disabled = true;
     }
@@ -2005,37 +2072,31 @@ function startApp() {
       await activateDownloadedMap();
       localStorage.setItem("openbeacon-map-mode", "downloaded");
     } catch {
-      removeBasemap(map, "regional");
-      addBasemap(map, isDark(), "regional", demoUrl, 7);
-      localStorage.setItem("openbeacon-map-mode", "bundled");
-      el("map-state").textContent = "Offline map · Lower Michigan";
+      try {
+        await protocol.get("bundled-michigan-lower-z12.pmtiles")!.getHeader();
+        removeBasemap(map, "regional");
+        addBasemap(map, isDark(), "regional", demoUrl, 7);
+        localStorage.setItem("openbeacon-map-mode", "bundled");
+        el("map-state").textContent = "Offline map · Lower Michigan";
+      } catch {
+        el("map-offline-status").textContent =
+          "No saved offline map is available. Download a region first.";
+        return;
+      }
     }
     localStorage.setItem("openbeacon-map-setup", "done");
-    el("map-online-status").textContent = "Local map selected.";
+    el("map-offline-status").textContent = "Offline map selected.";
   };
   let localPackId = 0;
   const mapSettingsDialog = el<HTMLDialogElement>("map-settings-dialog");
   el("settings-button").onclick = () => mapSettingsDialog.showModal();
   el("close-map-settings").onclick = () => mapSettingsDialog.close();
-  el("restore-regional").onclick = () => {
-    try {
-      removeBasemap(map, "regional");
-      addBasemap(map, isDark(), "regional", demoUrl, 7);
-      localStorage.setItem("openbeacon-map-mode", "bundled");
-      el("regional-name").textContent = "Lower Michigan · zoom 12";
-      el("map-state").textContent = "Offline map · world + Lower Michigan";
-      el("map-settings-error").textContent = "";
-    } catch (error) {
-      el("map-settings-error").textContent =
-        `Unable to restore the map: ${error instanceof Error ? error.message : String(error)}`;
-    }
-  };
   el<HTMLInputElement>("pack").addEventListener("change", async (e) => {
     const input = e.target as HTMLInputElement;
     const file = input.files?.[0];
     input.value = "";
     if (!file) return;
-    el("map-settings-error").textContent = "";
+    el("map-import-status").textContent = "";
     try {
       const key = `regional-${++localPackId}`;
       const source = new FileSource(file);
@@ -2057,9 +2118,10 @@ function startApp() {
       el("regional-name").textContent =
         `${file.name} · zoom ${header.minZoom}–${header.maxZoom}`;
       el("map-state").textContent = `Offline map · ${file.name}`;
+      el("map-import-status").textContent = "Map opened for this session.";
       el("map-message").hidden = true;
     } catch (error) {
-      el("map-settings-error").textContent =
+      el("map-import-status").textContent =
         `Unable to open map: ${error instanceof Error ? error.message : String(error)}`;
     }
   });
@@ -2393,6 +2455,8 @@ function startApp() {
     receivedAt: number;
   };
   let gpsFix: GpsFix | null = null;
+  let gpsDisplayedFresh = false;
+  let lastGpsDistanceUpdate = 0;
   let gpsWanted = false,
     gpsGeneration = 0;
   const gpsPort = el<HTMLSelectElement>("gps-port");
@@ -2424,11 +2488,7 @@ function startApp() {
           : "Connect to a running gpsd service; receiver support depends on gpsd and the device.";
   };
   function freshGps(): GpsFix | null {
-    return gpsFix &&
-      Date.now() - gpsFix.receivedAt >= 0 &&
-      Date.now() - gpsFix.receivedAt <= 15000
-      ? gpsFix
-      : null;
+    return freshPosition(gpsFix);
   }
   async function refreshGpsPorts() {
     const devices = await desktop.listSerialDevices();
@@ -2484,6 +2544,7 @@ function startApp() {
   el("gps-disconnect").onclick = async () => {
     gpsWanted = false;
     gpsFix = null;
+    gpsDisplayedFresh = false;
     await desktop.disconnectGps();
     el("gps-detail").textContent = "GPS disconnected.";
     el("gps-status").textContent = configuredLocation
@@ -2492,8 +2553,15 @@ function startApp() {
     el("gps-dot").className = configuredLocation ? "green" : "";
     if (configuredLocation)
       showConfiguredLocation(configuredLocation.lat, configuredLocation.lon);
-    if (mobileActive)
-      stopBeaconSchedule("SmartBeaconing stopped: GPS disconnected.");
+    else {
+      locationMarker?.remove();
+      locationMarker = undefined;
+    }
+    updateDetails();
+    if (!el("packets-panel").hidden) renderMonitor();
+    if (!el("weather-panel").hidden) void refreshForecast();
+    if (mobileActive || (beaconScheduleActive && fixedBeaconRequiresGps))
+      stopBeaconSchedule("Beaconing stopped: GPS disconnected.");
   };
   const beaconDialog = el<HTMLDialogElement>("beacon-dialog");
   let beaconSending = false;
@@ -2502,6 +2570,8 @@ function startApp() {
   let lastMobileTime = 0,
     lastMobileCourse = 0;
   let beaconScheduleGeneration = 0;
+  let fixedBeaconPosition: Position | null = null;
+  let fixedBeaconRequiresGps = false;
   let beaconTimer: ReturnType<typeof setTimeout> | undefined;
   const intervalInput = el<HTMLInputElement>("beacon-interval");
   const savedInterval = Number(
@@ -2516,13 +2586,18 @@ function startApp() {
   function stopBeaconSchedule(reason = "Automatic beaconing stopped.") {
     beaconScheduleActive = false;
     mobileActive = false;
+    fixedBeaconPosition = null;
+    fixedBeaconRequiresGps = false;
     beaconScheduleGeneration++;
     clearTimeout(beaconTimer);
     el("beacon-schedule-state").textContent = reason;
     el("mobile-beacon-state").textContent = reason;
     updateBeaconMode();
   }
-  async function sendConfiguredBeacon(fix?: GpsFix) {
+  async function sendConfiguredBeacon(
+    fix?: Position & { speedKnots?: number | null; course?: number | null },
+  ) {
+    if (updateApplying) throw new Error("An update is being installed.");
     const location = fix ?? configuredLocation;
     if (!location) throw new Error("Set your station location first.");
     return el<HTMLSelectElement>("beacon-route").value === "rf"
@@ -2555,14 +2630,16 @@ function startApp() {
     if (
       !beaconScheduleActive ||
       generation !== beaconScheduleGeneration ||
-      !configuredLocation
+      !fixedBeaconPosition
     )
       return;
     beaconSending = true;
     updateBeaconMode();
     el("beacon-schedule-state").textContent = "Sending scheduled beacon…";
     try {
-      const result = await sendConfiguredBeacon();
+      if (fixedBeaconRequiresGps && !freshGps())
+        throw new Error("GPS fix is missing or stale.");
+      const result = await sendConfiguredBeacon(fixedBeaconPosition);
       showSentPacket(result);
       if (generation !== beaconScheduleGeneration) return;
       const next = Date.now() + Number(intervalInput.value) * 60000;
@@ -2583,10 +2660,14 @@ function startApp() {
     }
   }
   async function startAutoBeacon() {
+    if (updateApplying) {
+      el("beacon-schedule-state").textContent = "An update is being installed.";
+      return;
+    }
     if (
       beaconSending ||
       beaconScheduleActive ||
-      !configuredLocation ||
+      !fixedPosition(configuredLocation, freshGps()) ||
       !savedCallsign ||
       el<HTMLSelectElement>("beacon-mode").value !== "fixed"
     )
@@ -2604,6 +2685,14 @@ function startApp() {
           "Save an APRS-IS passcode in My Station first.";
         return;
       }
+      const selectedPosition = fixedPosition(configuredLocation, freshGps());
+      if (!selectedPosition) {
+        el("beacon-schedule-state").textContent =
+          "Set a manual location or connect GPS first.";
+        return;
+      }
+      fixedBeaconPosition = selectedPosition.position;
+      fixedBeaconRequiresGps = selectedPosition.requiresGps;
       localStorage.setItem("openbeacon-beacon-interval", intervalInput.value);
       beaconScheduleActive = true;
       updateBeaconMode();
@@ -2682,6 +2771,10 @@ function startApp() {
     }
   }
   el("mobile-start").onclick = async () => {
+    if (updateApplying) {
+      el("mobile-beacon-state").textContent = "An update is being installed.";
+      return;
+    }
     if (beaconSending || beaconScheduleActive || !savedCallsign) return;
     const fix = freshGps(),
       settings = smartSettings();
@@ -2726,6 +2819,26 @@ function startApp() {
     if (gpsWanted && !fix) {
       el("gps-status").textContent = "Waiting for GPS";
       el("gps-dot").className = "amber";
+      if (gpsDisplayedFresh) {
+        gpsDisplayedFresh = false;
+        if (configuredLocation)
+          showConfiguredLocation(
+            configuredLocation.lat,
+            configuredLocation.lon,
+          );
+        else {
+          locationMarker?.remove();
+          locationMarker = undefined;
+        }
+        updateDetails();
+        if (!el("packets-panel").hidden) renderMonitor();
+        if (!el("weather-panel").hidden) void refreshForecast();
+        if (beaconDialog.open) updateBeaconMode();
+      }
+    }
+    if (beaconScheduleActive && fixedBeaconRequiresGps && !fix) {
+      stopBeaconSchedule("Beaconing stopped: GPS fix is missing or stale.");
+      return;
     }
     if (!mobileActive) return;
     if (!fix || fix.speedKnots == null || fix.course == null) {
@@ -2798,10 +2911,11 @@ function startApp() {
   };
   function openBeaconSettings() {
     el("beacon-status").textContent = "";
+    const location = fixedPosition(configuredLocation, freshGps());
     el("beacon-preview").textContent =
-      configuredLocation && savedCallsign
-        ? `Station: ${savedCallsign} · Position: ${configuredLocation.lat.toFixed(5)}°, ${configuredLocation.lon.toFixed(5)}° · Symbol: ${savedSymbol}`
-        : "Set your station callsign and manual location before sending.";
+      location && savedCallsign
+        ? `Station: ${savedCallsign} · Position: ${location.position.lat.toFixed(5)}°, ${location.position.lon.toFixed(5)}° (${location.requiresGps ? "GPS fix" : "manual"}) · Symbol: ${savedSymbol}`
+        : "Set your station callsign and a manual location or connect GPS before sending.";
     updateBeaconMode();
     beaconDialog.showModal();
   }
@@ -2836,13 +2950,13 @@ function startApp() {
       beaconSending ||
       beaconScheduleActive ||
       mobile ||
-      !configuredLocation ||
+      !fixedPosition(configuredLocation, freshGps()) ||
       !savedCallsign;
     el<HTMLButtonElement>("beacon-start").disabled =
       beaconSending ||
       beaconScheduleActive ||
       mobile ||
-      !configuredLocation ||
+      !fixedPosition(configuredLocation, freshGps()) ||
       !savedCallsign;
     el<HTMLButtonElement>("beacon-stop").disabled = !beaconScheduleActive;
     el<HTMLButtonElement>("mobile-start").disabled =
@@ -2879,16 +2993,18 @@ function startApp() {
       beaconSending ||
       beaconScheduleActive ||
       el<HTMLSelectElement>("beacon-mode").value !== "fixed" ||
-      !configuredLocation ||
+      !fixedPosition(configuredLocation, freshGps()) ||
       !savedCallsign
     )
       return;
+    const selectedPosition = fixedPosition(configuredLocation, freshGps());
+    if (!selectedPosition) return;
     beaconSending = true;
     const button = el<HTMLButtonElement>("send-beacon");
     button.disabled = true;
     el("beacon-status").textContent = "Connecting and verifying login…";
     try {
-      const packet = await sendConfiguredBeacon();
+      const packet = await sendConfiguredBeacon(selectedPosition.position);
       showSentPacket(packet);
       el("beacon-status").textContent =
         `Beacon written to ${beaconRouteLabel()}.`;
@@ -3097,9 +3213,10 @@ function startApp() {
   centerLocation.setAttribute("aria-label", "Center on your location");
   centerLocation.textContent = "⊙";
   centerLocation.onclick = () => {
-    if (configuredLocation) {
+    const location = currentPosition(freshGps(), configuredLocation);
+    if (location) {
       map.flyTo({
-        center: [configuredLocation.lon, configuredLocation.lat],
+        center: [location.lon, location.lat],
         essential: true,
       });
     } else {
@@ -3117,17 +3234,13 @@ function startApp() {
       const marker = document.createElement("div");
       marker.className = "own-location";
       marker.setAttribute("role", "img");
-      marker.setAttribute(
-        "aria-label",
-        "Your configured location, not a GPS fix",
-      );
+      marker.setAttribute("aria-label", "Your station location");
       const dot = document.createElement("span");
       dot.className = "own-location-dot";
       dot.setAttribute("aria-hidden", "true");
       marker.append(dot);
       setSprite(dot, savedSymbol);
-      marker.title =
-        "Your configured APRS-IS filter center; GPS is not connected";
+      marker.title = "Your station location";
       locationMarker = new maplibre.Marker({
         element: marker,
         anchor: "center",
@@ -3169,10 +3282,10 @@ function startApp() {
         settings.symbol !== savedSymbol ||
         (settings.beacon_comment ?? "") !== savedComment ||
         (settings.rf_path ?? "WIDE2-2") !== savedRfPath ||
-        settings.location_set === false ||
-        !configuredLocation ||
-        settings.lat !== configuredLocation.lat ||
-        settings.lon !== configuredLocation.lon)
+        (settings.location_set !== false) !== !!configuredLocation ||
+        (configuredLocation &&
+          (settings.lat !== configuredLocation.lat ||
+            settings.lon !== configuredLocation.lon)))
     )
       stopBeaconSchedule(
         "Automatic beaconing stopped because station settings changed.",
@@ -3211,21 +3324,25 @@ function startApp() {
     updateDetails();
     if (!el("packets-panel").hidden) renderMonitor();
     if (!el("weather-panel").hidden) void refreshForecast();
-    if (configuredLocation) {
-      showConfiguredLocation(settings.lat, settings.lon);
-      el("gps-status").textContent = "Manual location";
+    const fix = freshGps();
+    const displayLocation = currentPosition(fix, configuredLocation);
+    if (displayLocation) {
+      showConfiguredLocation(displayLocation.lat, displayLocation.lon);
+      el("gps-status").textContent = fix ? "GPS fix" : "Manual location";
       el("gps-dot").className = "green";
       el("filter-location").textContent =
-        `Filter center: ${settings.lat.toFixed(4)}°, ${settings.lon.toFixed(4)}° (manual)`;
+        `Filter center will use ${fix ? "the current GPS fix" : "the manual location"} when connecting.`;
     } else {
       locationMarker?.remove();
       locationMarker = undefined;
-      localStorage.removeItem("openbeacon-location");
-      el("gps-status").textContent = "Set location";
-      el("gps-dot").className = "";
+      el("gps-status").textContent = gpsWanted
+        ? "Waiting for GPS"
+        : "Set location";
+      el("gps-dot").className = gpsWanted ? "amber" : "";
       el("filter-location").textContent =
-        "Set your location using GPS in the status bar.";
+        "Set a manual location or connect GPS in the status bar.";
     }
+    if (!configuredLocation) localStorage.removeItem("openbeacon-location");
   }
   el<HTMLSelectElement>("theme-choice").onchange = async (event) => {
     const choice = (event.target as HTMLSelectElement).value as Theme;
@@ -3273,16 +3390,26 @@ function startApp() {
       throw new Error(
         "Set your callsign and SSID in My Station before connecting.",
       );
-    if (!settings.location_set)
-      throw new Error("Set your location using GPS before connecting.");
+    const connectionSettings = connectionLocation(
+      settings,
+      freshGps(),
+      configuredLocation,
+    );
+    if (!connectionSettings)
+      throw new Error(
+        "Set a manual location or connect GPS and wait for a fix before connecting.",
+      );
+    const location = connectionSettings;
     wanted = true;
     status("connecting", "Connecting…");
     try {
-      const g = await desktop.connect(settings);
+      const g = await desktop.connect(connectionSettings);
+      el("filter-location").textContent =
+        `Filter center: ${location.lat.toFixed(4)}°, ${location.lon.toFixed(4)}° (${freshGps() ? "GPS at connection" : "manual"}); reconnect to update.`;
       generation = Math.max(generation, g);
       if (centerMap)
         map.flyTo({
-          center: [settings.lon, settings.lat],
+          center: [location.lon, location.lat],
           zoom: Math.max(8, map.getZoom()),
           essential: true,
         });
@@ -3321,18 +3448,39 @@ function startApp() {
       gpsGeneration = payload.generation;
       el("gps-detail").textContent = payload.message;
       if (payload.state === "fix" && payload.fix) {
+        const firstFix = !freshGps();
         gpsFix = payload.fix;
+        gpsDisplayedFresh = true;
         el("gps-status").textContent = "GPS fix";
         el("gps-dot").className = "green";
         showConfiguredLocation(payload.fix.lat, payload.fix.lon);
+        if (firstFix || Date.now() - lastGpsDistanceUpdate >= 5000) {
+          lastGpsDistanceUpdate = Date.now();
+          updateDetails();
+          if (!el("packets-panel").hidden) renderMonitor();
+        }
+        if (firstFix && !el("weather-panel").hidden) void refreshForecast();
         if (beaconDialog.open) updateBeaconMode();
       } else if (payload.state === "error") {
         gpsWanted = false;
         gpsFix = null;
+        gpsDisplayedFresh = false;
+        if (configuredLocation)
+          showConfiguredLocation(
+            configuredLocation.lat,
+            configuredLocation.lon,
+          );
+        else {
+          locationMarker?.remove();
+          locationMarker = undefined;
+        }
+        updateDetails();
+        if (!el("packets-panel").hidden) renderMonitor();
+        if (!el("weather-panel").hidden) void refreshForecast();
         el("gps-status").textContent = "GPS error";
         el("gps-dot").className = "amber";
-        if (mobileActive)
-          stopBeaconSchedule("SmartBeaconing stopped: GPS connection failed.");
+        if (mobileActive || (beaconScheduleActive && fixedBeaconRequiresGps))
+          stopBeaconSchedule("Beaconing stopped: GPS connection failed.");
       }
     }),
     desktop.onTncStatus((payload) => {
@@ -3596,6 +3744,130 @@ function startApp() {
       el("connect-error").textContent = String(error);
     }
   };
+  let availableUpdate: Update | null = null;
+  let updateBusy = false;
+  let downloadedUpdate = false;
+  let updateSupported = false;
+  const updateStatus = el("update-status");
+  const updateNotice = el<HTMLButtonElement>("update-notice");
+  const updateCheck = el<HTMLButtonElement>("check-updates");
+  const updateInstall = el<HTMLButtonElement>("install-update");
+  const updateProgress = el<HTMLProgressElement>("update-progress");
+  function updateIsBlocked() {
+    return updateBlocked({
+      positionBeacon: beaconScheduleActive,
+      weatherBeacon: weatherBeaconActive,
+      transmitting:
+        beaconSending ||
+        messageTransmissions > 0 ||
+        outbox.some((item) => item.state === "sending"),
+      weatherBusy: weatherBeaconBusy,
+      mapDownload:
+        activeMapDownload !== null ||
+        !el<HTMLButtonElement>("cancel-map-download").disabled,
+    });
+  }
+  async function checkForUpdates() {
+    if (updateBusy) return;
+    updateBusy = true;
+    updateCheck.disabled = true;
+    updateInstall.disabled = true;
+    updateStatus.textContent = "Checking for updates…";
+    try {
+      updateSupported = await desktop.updateInstallSupported();
+      const next = await checkUpdate({ timeout: 15000 });
+      if (availableUpdate) await availableUpdate.close();
+      availableUpdate = next;
+      downloadedUpdate = false;
+      updateProgress.hidden = true;
+      updateNotice.hidden = !next;
+      updateInstall.hidden = !next;
+      if (!next) updateStatus.textContent = "OpenBeacon is up to date.";
+      else {
+        updateInstall.textContent = updateSupported
+          ? "Download and install"
+          : "Open release downloads";
+        updateStatus.textContent = `Version ${next.version} is available.${updateSupported ? "" : " Install the AppImage to enable automatic updates."}`;
+      }
+    } catch (error) {
+      updateStatus.textContent = `Could not check for updates: ${String(error)}`;
+    } finally {
+      updateBusy = false;
+      updateCheck.disabled = false;
+      updateInstall.disabled = false;
+    }
+  }
+  updateCheck.onclick = () => void checkForUpdates();
+  updateNotice.onclick = () => {
+    if (!mapSettingsDialog.open) mapSettingsDialog.showModal();
+  };
+  updateInstall.onclick = async () => {
+    if (updateBusy || !availableUpdate) return;
+    if (!updateSupported) {
+      try {
+        await desktop.openReleases();
+      } catch (error) {
+        updateStatus.textContent = String(error);
+      }
+      return;
+    }
+    if (updateIsBlocked()) {
+      updateStatus.textContent =
+        "Stop beaconing and finish or cancel active transmissions and map downloads before updating.";
+      return;
+    }
+    updateBusy = true;
+    updateCheck.disabled = true;
+    updateInstall.disabled = true;
+    try {
+      if (!downloadedUpdate) {
+        updateProgress.hidden = false;
+        updateProgress.removeAttribute("value");
+        let downloaded = 0,
+          total = 0;
+        updateStatus.textContent = "Downloading update…";
+        await availableUpdate.download(
+          (event) => {
+            if (event.event === "Started")
+              total = event.data.contentLength ?? 0;
+            if (event.event === "Progress") {
+              downloaded += event.data.chunkLength;
+              if (total > 0)
+                updateProgress.value = Math.min(
+                  100,
+                  (downloaded / total) * 100,
+                );
+            }
+            if (event.event === "Finished")
+              updateStatus.textContent = "Verifying update…";
+          },
+          { timeout: 300000 },
+        );
+        downloadedUpdate = true;
+      }
+      if (updateIsBlocked()) {
+        updateStatus.textContent =
+          "Update downloaded. Stop beaconing and finish active operations, then select Install update.";
+        updateInstall.textContent = "Install update";
+        return;
+      }
+      updateApplying = true;
+      updateStatus.textContent = "Installing update…";
+      await availableUpdate.install();
+      updateStatus.textContent = "Update installed. Restarting OpenBeacon…";
+      await relaunch();
+    } catch (error) {
+      updateStatus.textContent = `Update failed: ${String(error)}`;
+      updateProgress.hidden = true;
+    } finally {
+      updateApplying = false;
+      updateBusy = false;
+      updateCheck.disabled = false;
+      updateInstall.disabled = false;
+    }
+  };
+  // A check never starts a download or interrupts an active session.
+  setTimeout(() => void checkForUpdates(), 5000);
   applyTheme();
 }
 

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "OpenBeacon",
-  "version": "0.1.0",
+  "version": "0.2.0-beta.1",
   "identifier": "org.openbeacon.maptest",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -25,12 +25,7 @@
   },
   "bundle": {
     "active": false,
-    "resources": {
-      "../public/maps/world-z6.pmtiles": "maps/world-z6.pmtiles",
-      "../public/maps/michigan-lower-z12.pmtiles": "maps/michigan-lower-z12.pmtiles",
-      "resources/direwolf-linux-x86_64": "direwolf-linux-x86_64",
-      "resources/pmtiles-linux-x86_64.gz": "pmtiles-linux-x86_64.gz"
-    },
+    "resources": {},
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -38,5 +33,17 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI2QTcwNDQwQzZCRDRFMkEKUldRcVRyM0dRQVNudG5wWUVXYVdxVloxN3hyVVFQMHJsRGJzZWxBdk9iMUFRcVpVNXdUS1pIdnkK",
+      "endpoints": [
+        "https://raw.githubusercontent.com/sideout909/OpenBeacon/update-feed/latest.json"
+      ],
+      "requireSignedVersion": true,
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

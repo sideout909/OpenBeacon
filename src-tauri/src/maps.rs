@@ -56,6 +56,87 @@ pub async fn read_map_range(
     read_range(&path, offset, length)
 }
 
+// go-pmtiles prints carriage-return-delimited progress updates to stdout.
+fn extract_progress(line: &str) -> Option<u8> {
+    let line = line
+        .trim_start()
+        .strip_prefix("fetching chunks")?
+        .trim_start();
+    let value = line
+        .split_whitespace()
+        .next()?
+        .strip_suffix('%')?
+        .parse::<u8>()
+        .ok()?;
+    (value <= 100).then_some(value)
+}
+
+fn read_extract_progress(mut reader: impl Read, mut update: impl FnMut(u8)) -> std::io::Result<()> {
+    let mut frame = Vec::new();
+    let mut discard = false;
+    let mut last = None;
+    let mut bytes = [0u8; 4096];
+    loop {
+        let n = reader.read(&mut bytes)?;
+        if n == 0 {
+            break;
+        }
+        for &b in &bytes[..n] {
+            if b == b'\r' || b == b'\n' {
+                if !discard {
+                    if let Some(percent) =
+                        std::str::from_utf8(&frame).ok().and_then(extract_progress)
+                    {
+                        // The archive still needs to be finalized and checked at 100%.
+                        let percent = percent.min(99);
+                        if last.is_none_or(|previous| percent > previous) {
+                            update(percent);
+                            last = Some(percent);
+                        }
+                    }
+                }
+                frame.clear();
+                discard = false;
+            } else if !discard && frame.len() < 8192 {
+                frame.push(b);
+            } else {
+                discard = true;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_error_tail(mut reader: impl Read) -> std::io::Result<String> {
+    let mut tail = std::collections::VecDeque::new();
+    let mut chunk = [0u8; 2048];
+    loop {
+        let n = reader.read(&mut chunk)?;
+        if n == 0 {
+            break;
+        }
+        for &byte in &chunk[..n] {
+            if tail.len() == 8192 {
+                tail.pop_front();
+            }
+            tail.push_back(byte);
+        }
+    }
+    let bytes: Vec<u8> = tail.into_iter().collect();
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn download_failure(status: impl std::fmt::Display, stderr: &str) -> String {
+    let message = stderr.lines().map(str::trim).rfind(|line| !line.is_empty());
+    match message {
+        Some(line) => format!(
+            "Map download failed ({status}): {}",
+            line.chars().take(700).collect::<String>()
+        ),
+        None => format!("Map download failed ({status}). Check your connection and try again."),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -73,6 +154,37 @@ mod tests {
         assert!(output.status.success());
         assert!(String::from_utf8_lossy(&output.stdout).contains("1.31.2"));
         assert!(source.is_file());
+    }
+
+    #[test]
+    fn extractor_progress_reads_real_carriage_return_output() {
+        let data = b"2026/10/28 extracting\n\rfetching chunks   0% | | (0 B/1.2 MB)\r\rfetching chunks  25% | | (300 kB/1.2 MB)\r\rfetching chunks 100% | | (1.2/1.2 MB)\n";
+        let mut seen = Vec::new();
+        read_extract_progress(&data[..], |value| seen.push(value)).unwrap();
+        assert_eq!(seen, [0, 25, 99]);
+        assert_eq!(extract_progress("other 50% |"), None);
+        assert_eq!(extract_progress("fetching chunks 101% |"), None);
+    }
+
+    #[test]
+    fn progress_ignores_preallocated_file_size_and_recovers_after_garbage() {
+        let mut input = vec![b'x'; 9000];
+        input.extend_from_slice(
+            b"\rfetching chunks  12% |\r\nfetching chunks  10% |\r\nfetching chunks  40% |\r",
+        );
+        let mut seen = Vec::new();
+        read_extract_progress(&input[..], |value| seen.push(value)).unwrap();
+        assert_eq!(seen, [12, 40]);
+    }
+
+    #[test]
+    fn download_error_retains_a_bounded_actionable_message() {
+        let mut input = vec![b'x'; 12000];
+        input.extend_from_slice(b"\nError: server returned HTTP 503\n");
+        let error = read_error_tail(&input[..]).unwrap();
+        assert!(error.len() <= 8192);
+        assert!(download_failure("exit 1", &error).contains("server returned HTTP 503"));
+        assert!(download_failure("exit 1", "").contains("Check your connection"));
     }
 
     #[test]
@@ -136,7 +248,11 @@ pub async fn download_region_map(
     state: State<'_, MapDownload>,
     geometry: serde_json::Value,
     zoom: u8,
+    request_id: String,
 ) -> Result<(), String> {
+    if request_id.is_empty() || request_id.len() > 100 {
+        return Err("Invalid map download request.".into());
+    }
     if !(8..=15).contains(&zoom) {
         return Err("Choose a map detail level from 8 to 15.".into());
     }
@@ -225,8 +341,8 @@ pub async fn download_region_map(
                     .arg(format!("--region={}", region.path().display()))
                     .arg(format!("--maxzoom={zoom}"))
                     .arg("--download-threads=2")
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null());
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped());
                 #[cfg(target_os = "windows")]
                 command.creation_flags(0x08000000);
                 #[cfg(target_os = "linux")]
@@ -250,28 +366,45 @@ pub async fn download_region_map(
                     .map_err(|e| format!("Could not start map downloader: {e}"))?;
                 #[cfg(target_os = "linux")]
                 drop(staged_path);
+                let stdout = child
+                    .stdout
+                    .take()
+                    .ok_or("Could not read map download progress")?;
+                let stderr = child
+                    .stderr
+                    .take()
+                    .ok_or("Could not read map downloader errors")?;
+                let error_thread =
+                    std::thread::spawn(move || read_error_tail(stderr).unwrap_or_default());
+                let progress_app = app.clone();
+                let progress_thread = std::thread::spawn(move || {
+                    let _ = read_extract_progress(stdout, |percent| {
+                        let _ = progress_app.emit(
+                            "map-download-progress",
+                            serde_json::json!({ "requestId": request_id, "percent": percent }),
+                        );
+                    });
+                });
                 loop {
                     if cancel.load(Ordering::SeqCst) {
                         let _ = child.kill();
                         let _ = child.wait();
+                        let _ = progress_thread.join();
+                        let _ = error_thread.join();
                         return Err("Map download canceled.".into());
                     }
                     match child.try_wait().map_err(|e| e.to_string())? {
                         Some(status) if status.success() => break,
                         Some(status) => {
-                            return Err(format!(
-                            "Map download failed ({status}). Check your connection and try again."
-                        ))
+                            let _ = progress_thread.join();
+                            let detail = error_thread.join().unwrap_or_default();
+                            return Err(download_failure(status, &detail));
                         }
-                        None => {
-                            let bytes = std::fs::metadata(&output_path)
-                                .map(|m| m.len())
-                                .unwrap_or(0);
-                            let _ = app.emit("map-download-progress", bytes);
-                            std::thread::sleep(Duration::from_millis(300));
-                        }
+                        None => std::thread::sleep(Duration::from_millis(300)),
                     }
                 }
+                let _ = progress_thread.join();
+                let _ = error_thread.join();
                 if cancel.load(Ordering::SeqCst) {
                     return Err("Map download canceled.".into());
                 }

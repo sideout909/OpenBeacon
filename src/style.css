@@ -54,3 +54,7 @@ dialog .map-checkbox{display:flex;gap:8px;align-items:center}dialog .map-checkbo
 #gps-custom-label[hidden]{display:none}#location-dialog{max-height:85vh;overflow:auto}
 
 .weather-collapsible > summary{cursor:pointer;font-weight:700;font-size:1.17em;list-style-position:inside}
+
+#map-download-progress{width:100%;margin-top:12px;accent-color:var(--accent)}
+
+#update-notice[hidden],#install-update[hidden],#update-progress[hidden]{display:none}#update-progress{width:100%;margin-top:12px;accent-color:var(--accent)}

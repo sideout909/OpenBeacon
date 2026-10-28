@@ -1,7 +1,7 @@
 {
   "name": "openbeacon",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0-beta.1",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
@@ -15,6 +15,8 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.14.1",
     "maplibre-gl": "^6.16.0",
     "pmtiles": "^4.0.0",
     "topojson-client": "^3.1.0"

@@ -106,6 +106,8 @@ After the first release, finish the broader product scope with telemetry, object
 
 **Exit:** a user can start with the world map, select and manage a regional pack, choose online maps, and operate predictably after disconnecting.
 
+- [x] Add signed Windows and Linux update support using GitHub release artifacts; users choose when to install. Verify upgrades on real Windows and Linux machines.
+
 ## Milestone 4 — Radio receive: TS-2000X and additional TNCs
 
 See [KISS and Kenwood TNC research](KISS_TNC_RESEARCH.md) for protocol, model-specific setup, Dire Wolf correction, and hardware verification notes.
@@ -114,6 +116,7 @@ See [KISS and Kenwood TNC research](KISS_TNC_RESEARCH.md) for protocol, model-sp
 
 - [ ] Document the actual TS-2000X soundcard, cabling, PTT, port configuration, and internal TNC capabilities/modes from the setup and device documentation. Do not assume that the internal TNC exposes KISS or another particular interface until confirmed.
 - [ ] Integrate the imported Groundside KISS framing and AX.25 UI decoder; evaluate its TCP receive architecture against OpenBeacon’s needs. Implement and test a bundled Dire Wolf adapter, beginning with receive over network KISS. OpenBeacon manages the modem so users do not need a separate installation. A Linux x86-64 receive-only sidecar and initial controls exist. The owner’s 88-second APRS recording produced seven KISS frames, matching Groundside’s seven unrepaired Dire Wolf reference frames; the OpenBeacon packet core decoded positions from all seven. Verify desktop event/display and live hardware operation, packaging, and Windows and macOS sidecars.
+- [ ] Bundle and manage Dire Wolf natively in the Windows build, so Windows users can select audio devices and receive RF without installing or starting Dire Wolf separately. Include a maintained Windows sidecar, verify its security fixes and licensing, and test device selection, startup, shutdown, error handling, packaging, and live reception on Windows. Decide and separately validate any transmit/PTT support.
 - [ ] Validate serial and TCP KISS reception and transmission on supported platforms and additional TNCs. The owner has received live RF using NucleoTNC serial KISS and the TS-2000 native monitor mode. TS-2000X guidance covers KISS and native text monitoring. With the owner, Menu 55 enabled and a dummy load connected, native monitoring yielded three real TNC2 text lines decoded by the shared APRS core; desktop integration, KISS mode, FCS behavior and CAT ownership remain to be verified. The app sends no KISS setup or mode commands.
 - [ ] Show connection state, source name, port, receive counts, errors, and reconnect behavior. Support multiple sources without losing provenance. Highlight newly received RF packets in the recent-packet strip and hold them briefly even during a busy APRS-IS stream; verify filtering, multiple RF arrivals, and normal history retention.
 - [x] Receive real packets through Dire Wolf and the TS-2000 internal TNC; owner has observed RF on the map and compared transmissions with a D710.

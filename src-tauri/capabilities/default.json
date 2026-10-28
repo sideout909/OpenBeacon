@@ -1,1 +1,12 @@
-{"identifier":"default","description":"Main window core access","windows":["main"],"permissions":["core:default"]}
+{
+  "identifier": "default",
+  "description": "Main window core access",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "updater:default",
+    "process:allow-restart"
+  ]
+}

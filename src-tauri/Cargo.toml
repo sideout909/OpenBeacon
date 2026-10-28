@@ -1,6 +1,6 @@
 [package]
 name = "openbeacon-map-test"
-version = "0.1.0"
+version = "0.2.0-beta.1"
 edition = "2021"
 license = "GPL-3.0-or-later"
 
@@ -18,3 +18,5 @@ tempfile = "3"
 libc = "0.2"
 flate2 = "1"
 reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "json", "rustls", "query"] }
+tauri-plugin-updater = "2.14.1"
+tauri-plugin-process = "2.4.0"

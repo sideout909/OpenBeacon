@@ -1,0 +1,74 @@
+name: Prepare signed release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Version tag matching package.json, for example v0.2.0-beta.1
+        required: true
+        type: string
+permissions:
+  contents: write
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check release version
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: node -e 'if (process.env.RELEASE_TAG !== `v${require("./package.json").version}`) throw Error("Tag must match package.json version")'
+      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev cmake
+      - run: npm ci
+      - run: scripts/build-direwolf-linux.sh
+      - run: npm run check
+      - name: Build signed Linux AppImage and create draft
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ inputs.tag }}
+          releaseName: OpenBeacon ${{ inputs.tag }}
+          releaseBody: 'Draft release. Review and edit these notes before publishing.'
+          releaseDraft: true
+          prerelease: true
+          args: --config src-tauri/tauri.linux.conf.json
+  windows:
+    needs: linux
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - name: Obtain verified Windows map downloader
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Invoke-WebRequest 'https://github.com/protomaps/go-pmtiles/releases/download/v1.31.2/go-pmtiles_1.31.2_Windows_x86_64.zip' -OutFile pmtiles.zip
+          if ((Get-FileHash pmtiles.zip -Algorithm SHA256).Hash.ToLower() -ne 'a658baa4d7e55020aef6ca17bd9ff9faa1582671266b36f58c52db0ac8e785a1') { throw 'Map downloader checksum mismatch' }
+          Expand-Archive pmtiles.zip -DestinationPath pmtiles-download
+          Copy-Item pmtiles-download/pmtiles.exe src-tauri/resources/pmtiles-windows-x86_64.exe
+      - run: npm test
+      - name: Build signed Windows installer and update draft
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ inputs.tag }}
+          releaseName: OpenBeacon ${{ inputs.tag }}
+          releaseDraft: true
+          prerelease: true
+          updaterJsonPreferNsis: true
+          args: --config src-tauri/tauri.windows.conf.json

@@ -1,0 +1,22 @@
+{
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "createUpdaterArtifacts": true,
+    "resources": {
+      "resources/pmtiles-windows-x86_64.exe": "pmtiles-windows-x86_64.exe",
+      "../README.md": "README.md",
+      "../USER_GUIDE.md": "USER_GUIDE.md",
+      "../LICENSE": "LICENSE",
+      "../THIRD-PARTY-NOTICES.md": "THIRD-PARTY-NOTICES.md",
+      "../third-party/": "third-party/",
+      "../public/fonts/OFL.txt": "third-party/fonts/OFL.txt",
+      "../public/aprs-symbols/COPYRIGHT.md": "third-party/aprs-symbols/COPYRIGHT.md",
+      "../src/data/README.md": "third-party/aprs-deviceid/README.md",
+      "../src/data/aprs-deviceid.json": "third-party/aprs-deviceid/aprs-deviceid.json",
+      "../UPDATE_RELEASES.md": "UPDATE_RELEASES.md"
+    }
+  }
+}

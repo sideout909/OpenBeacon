@@ -302,6 +302,30 @@ fn disconnect_aprs(state: State<'_, Connection>) {
     state.0.fetch_add(1, Ordering::SeqCst);
 }
 #[tauri::command]
+fn update_install_supported() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        std::env::var_os("APPIMAGE").is_some()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        true
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        false
+    }
+}
+#[tauri::command]
+fn open_releases(app: tauri::AppHandle) -> Result<(), String> {
+    app.opener()
+        .open_url(
+            "https://github.com/sideout909/OpenBeacon/releases",
+            None::<&str>,
+        )
+        .map_err(|e| e.to_string())
+}
+#[tauri::command]
 fn open_map_provider(app: tauri::AppHandle) -> Result<(), String> {
     app.opener()
         .open_url("https://protomaps.com/api", None::<&str>)
@@ -316,6 +340,8 @@ fn open_passcode_generator(app: tauri::AppHandle) -> Result<(), String> {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             app.manage(Connection::default());
             app.manage(gps::Gps::default());
@@ -352,6 +378,8 @@ fn main() {
             beacon::save_aprs_passcode,
             beacon::aprs_passcode_saved,
             beacon::clear_aprs_passcode,
+            update_install_supported,
+            open_releases,
             open_passcode_generator,
             open_map_provider,
             connect_aprs,

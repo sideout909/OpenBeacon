@@ -161,18 +161,25 @@ export const desktop = {
   aprsPasscodeSaved: (callsign: string) =>
     invoke<boolean>("aprs_passcode_saved", { callsign }),
   clearAprsPasscode: () => invoke<void>("clear_aprs_passcode"),
+  updateInstallSupported: () => invoke<boolean>("update_install_supported"),
+  openReleases: () => invoke<void>("open_releases"),
   openMapProvider: () => invoke<void>("open_map_provider"),
   openPasscodeGenerator: () => invoke<void>("open_passcode_generator"),
   loadHistory: () => invoke<DecodedPacket[]>("load_history"),
   onHistoryError: (handler: (message: string) => void) =>
     listen<string>("history-error", (event) => handler(event.payload)),
-  downloadRegionMap: (geometry: unknown, zoom: number) =>
-    invoke<void>("download_region_map", { geometry, zoom }),
+  downloadRegionMap: (geometry: unknown, zoom: number, requestId: string) =>
+    invoke<void>("download_region_map", { geometry, zoom, requestId }),
   cancelMapDownload: () => invoke<void>("cancel_map_download"),
   readDownloadedMap: (offset: number, length: number) =>
     invoke<number[]>("read_downloaded_map", { offset, length }),
-  onMapDownloadProgress: (handler: (bytes: number) => void) =>
-    listen<number>("map-download-progress", (event) => handler(event.payload)),
+  onMapDownloadProgress: (
+    handler: (progress: { requestId: string; percent: number }) => void,
+  ) =>
+    listen<{ requestId: string; percent: number }>(
+      "map-download-progress",
+      (event) => handler(event.payload),
+    ),
   readMapRange: (name: string, offset: number, length: number) =>
     invoke<number[]>("read_map_range", { name, offset, length }),
   loadSettings: () => invoke<ConnectionSettings | null>("load_settings"),
