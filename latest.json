@@ -1,23 +1,23 @@
 {
-  "version": "0.2.0-beta.1",
+  "version": "0.2.0-beta.2",
   "notes": "",
-  "pub_date": "2026-10-28T19:43:58.729Z",
+  "pub_date": "2026-10-28T20:16:17.428Z",
   "platforms": {
     "linux-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVRyM0dRQVNudG9mN1hiZEgzNWZrWW5HVW1hNVlhc0pzbGp5R3NWejgvczRPU24raDk1Wk5qL05uOVdQeWFnTStvNlB0b3ZBSCtUQlhZdThDSlRtREdwRnJJN1kvRHdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjE1OTY4CWZpbGU6T3BlbkJlYWNvbl8wLjIuMC1iZXRhLjFfYW1kNjQuQXBwSW1hZ2UJdmVyc2lvbjowLjIuMC1iZXRhLjEKVFVudmpDRHFDckROZDVEcXNvYnRhZlRxMkt6eGRRQ3A1cE1uSjNUZytIMzFIL0ZaSFFzcElSdktoTUd3NkFxdzFqd25HYm8zMDJBaXhZT3VTYkp5QXc9PQo=",
-      "url": "https://github.com/sideout909/OpenBeacon/releases/download/v0.2.0-beta.1/OpenBeacon_0.2.0-beta.1_amd64.AppImage"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVRyM0dRQVNudGdKTnJBV2RpbTdzOU9CK0xmckxxMjVYcXVTU1h6UjRkWTdpNm82MEFvNnIreks4MGFQa2RYK3NvRUhYbEkwK1FWMzh1OWh0NzNqanpvTFpXdVhJYWdNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjE3OTEyCWZpbGU6T3BlbkJlYWNvbl8wLjIuMC1iZXRhLjJfYW1kNjQuQXBwSW1hZ2UJdmVyc2lvbjowLjIuMC1iZXRhLjIKaXhaSmg1aFZjc1F2ZHFoYTVBNHNDTk1lckJ4Nkc3bnlyUVRENzgvV1JMZGNpeVJrTnBmTmY3UzU3cFAzRFhOdm56WVl3VENqRzkwQ2JRRld6V2pEQlE9PQo=",
+      "url": "https://github.com/sideout909/OpenBeacon/releases/download/v0.2.0-beta.2/OpenBeacon_0.2.0-beta.2_amd64.AppImage"
     },
     "linux-x86_64-appimage": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVRyM0dRQVNudG9mN1hiZEgzNWZrWW5HVW1hNVlhc0pzbGp5R3NWejgvczRPU24raDk1Wk5qL05uOVdQeWFnTStvNlB0b3ZBSCtUQlhZdThDSlRtREdwRnJJN1kvRHdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjE1OTY4CWZpbGU6T3BlbkJlYWNvbl8wLjIuMC1iZXRhLjFfYW1kNjQuQXBwSW1hZ2UJdmVyc2lvbjowLjIuMC1iZXRhLjEKVFVudmpDRHFDckROZDVEcXNvYnRhZlRxMkt6eGRRQ3A1cE1uSjNUZytIMzFIL0ZaSFFzcElSdktoTUd3NkFxdzFqd25HYm8zMDJBaXhZT3VTYkp5QXc9PQo=",
-      "url": "https://github.com/sideout909/OpenBeacon/releases/download/v0.2.0-beta.1/OpenBeacon_0.2.0-beta.1_amd64.AppImage"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVRyM0dRQVNudGdKTnJBV2RpbTdzOU9CK0xmckxxMjVYcXVTU1h6UjRkWTdpNm82MEFvNnIreks4MGFQa2RYK3NvRUhYbEkwK1FWMzh1OWh0NzNqanpvTFpXdVhJYWdNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjE3OTEyCWZpbGU6T3BlbkJlYWNvbl8wLjIuMC1iZXRhLjJfYW1kNjQuQXBwSW1hZ2UJdmVyc2lvbjowLjIuMC1iZXRhLjIKaXhaSmg1aFZjc1F2ZHFoYTVBNHNDTk1lckJ4Nkc3bnlyUVRENzgvV1JMZGNpeVJrTnBmTmY3UzU3cFAzRFhOdm56WVl3VENqRzkwQ2JRRld6V2pEQlE9PQo=",
+      "url": "https://github.com/sideout909/OpenBeacon/releases/download/v0.2.0-beta.2/OpenBeacon_0.2.0-beta.2_amd64.AppImage"
     },
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVRyM0dRQVNudG9NWEhVMmtERDg0NVYyaXRaUW5RWjJFaFdqUzVjbm9Zdm40bndaUlFaMmR5VVltQ1FMR3hZbjA3dGd6VTBEQytJaE5kU2tYZDZRY2ZMeS82aGpZVEFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjE2NjM2CWZpbGU6T3BlbkJlYWNvbl8wLjIuMC1iZXRhLjFfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMi4wLWJldGEuMQp4cXN0M1FzOXZ2TnhiK3ZrUVZwL29rak50RzMwYzF2NE1lZEttdXNMenZWL2xiTEdmOVlQeE5KMXEzdFJzMUxYajgwNm1yR0hZSFMwNHZvR0ljZ0lEdz09Cg==",
-      "url": "https://github.com/sideout909/OpenBeacon/releases/download/v0.2.0-beta.1/OpenBeacon_0.2.0-beta.1_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVRyM0dRQVNudG9PczY3MUdvMkNFaVJERnZyWDI0T1BtZEtzVGZxaDk5bEpiNC8rc1BqenRxc0E2ZzBrVXMzU0YrL1BXaXpmUmxyUUdLL0FpcVZWdzhmcGNXNjltSkFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjE4NTcyCWZpbGU6T3BlbkJlYWNvbl8wLjIuMC1iZXRhLjJfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMi4wLWJldGEuMgpoSFVnVzJZOE1STUlSNFVncEt6eEs4SzJ5UlFmMDJZenBWSHo3TEpTZjNWd1BqeStNbGF1eUs1WWtxdktBT1M3eGhSSk04S0RaSG5HTjdBOVllQVpDUT09Cg==",
+      "url": "https://github.com/sideout909/OpenBeacon/releases/download/v0.2.0-beta.2/OpenBeacon_0.2.0-beta.2_x64-setup.exe"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVRyM0dRQVNudG9NWEhVMmtERDg0NVYyaXRaUW5RWjJFaFdqUzVjbm9Zdm40bndaUlFaMmR5VVltQ1FMR3hZbjA3dGd6VTBEQytJaE5kU2tYZDZRY2ZMeS82aGpZVEFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjE2NjM2CWZpbGU6T3BlbkJlYWNvbl8wLjIuMC1iZXRhLjFfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMi4wLWJldGEuMQp4cXN0M1FzOXZ2TnhiK3ZrUVZwL29rak50RzMwYzF2NE1lZEttdXNMenZWL2xiTEdmOVlQeE5KMXEzdFJzMUxYajgwNm1yR0hZSFMwNHZvR0ljZ0lEdz09Cg==",
-      "url": "https://github.com/sideout909/OpenBeacon/releases/download/v0.2.0-beta.1/OpenBeacon_0.2.0-beta.1_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcVRyM0dRQVNudG9PczY3MUdvMkNFaVJERnZyWDI0T1BtZEtzVGZxaDk5bEpiNC8rc1BqenRxc0E2ZzBrVXMzU0YrL1BXaXpmUmxyUUdLL0FpcVZWdzhmcGNXNjltSkFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMjE4NTcyCWZpbGU6T3BlbkJlYWNvbl8wLjIuMC1iZXRhLjJfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMi4wLWJldGEuMgpoSFVnVzJZOE1STUlSNFVncEt6eEs4SzJ5UlFmMDJZenBWSHo3TEpTZjNWd1BqeStNbGF1eUs1WWtxdktBT1M3eGhSSk04S0RaSG5HTjdBOVllQVpDUT09Cg==",
+      "url": "https://github.com/sideout909/OpenBeacon/releases/download/v0.2.0-beta.2/OpenBeacon_0.2.0-beta.2_x64-setup.exe"
     }
   }
 }
