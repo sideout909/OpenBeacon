@@ -109,3 +109,17 @@ fn serialized_event_preserves_raw_bytes_and_expected_frontend_fields() {
     assert_eq!(value["position"]["speedKnots"], 404);
     assert_eq!(value["rawBytes"].as_array().unwrap().len(), raw.len());
 }
+
+#[test]
+fn compressed_positions_without_motion_from_real_capture() {
+    let packet = decode_tnc2(b"W8LLC>APGRWO:!/8s<a8sH4-  CGraywolf");
+    assert_eq!(packet.kind, "compressed_position");
+    let position = packet.position.unwrap();
+    assert!(position.latitude > 40.0 && position.latitude < 50.0);
+    assert!(position.longitude > -90.0 && position.longitude < -80.0);
+    assert_eq!(position.symbol, "/-");
+    assert_eq!(position.comment, "Graywolf");
+    assert_eq!(position.speed_knots, None);
+    let invalid = decode_tnc2(b"N0CALL>APRS:!/ s<a8sH4-  Cexample");
+    assert!(invalid.position.is_none());
+}

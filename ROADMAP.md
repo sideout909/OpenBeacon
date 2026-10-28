@@ -166,7 +166,9 @@ See [KISS and Kenwood TNC research](KISS_TNC_RESEARCH.md) for protocol, model-sp
 
 **Exit:** a user can intentionally send a beacon or message through an explicitly enabled supported route, observe the result, pause transmission, and restart or reconnect without surprise transmissions.
 
-### WeatherLink-to-RF weather transmission (planned feature)
+### Weather station APRS transmission
+
+**Progress:** Manual Weather Underground PWS and Peet Bros Ultimeter serial observations can be transmitted as APRS weather over APRS-IS or supported RF TNCs. Both need live source and RF validation; an opt-in weather beacon schedule with a 20-minute Weather Underground unchanged-value guard is implemented. Direct WX-Link integration remains open.
 
 **Goal:** let the operator transmit current readings from their home weather station as APRS weather packets over an explicitly selected RF TNC. WeatherLink is an owner-built IoT device that gathers those readings and currently sends data onward to aprs.fi; its interfaces and exact data flow still need to be verified.
 

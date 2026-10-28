@@ -699,6 +699,7 @@ fn rf_frame(call: &str, path: &str, payload: &str) -> Result<Vec<u8>, String> {
     encode_kiss(0, &frame)
 }
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn send_rf_beacon(
     state: State<'_, Tnc>,
     callsign: String,
@@ -707,11 +708,11 @@ pub async fn send_rf_beacon(
     symbol: String,
     comment: String,
     path: String,
+    speed_knots: Option<f64>,
+    course: Option<f64>,
 ) -> Result<String, String> {
-    if comment.len() > 40 || !comment.bytes().all(|b| (32..=126).contains(&b)) {
-        return Err("Invalid beacon comment".into());
-    }
-    let payload = format!("{}{}", crate::beacon::position(lat, lon, &symbol)?, comment);
+    let payload =
+        crate::beacon::position_payload(lat, lon, &symbol, &comment, speed_knots, course)?;
     send_rf_payload(state, callsign, path, payload).await
 }
 pub(crate) async fn send_rf_payload(

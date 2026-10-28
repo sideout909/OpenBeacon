@@ -59,6 +59,22 @@ pub async fn read_map_range(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn compressed_extractor_stages_and_runs_without_locking_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/pmtiles-linux-x86_64.gz");
+        let staged = stage_extractor(&source, dir.path()).unwrap();
+        let output = std::process::Command::new(&staged)
+            .arg("version")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1.31.2"));
+        assert!(source.is_file());
+    }
+
     #[test]
     fn range_reads_are_bounded_and_truncated_at_end() {
         let path = std::env::temp_dir().join(format!("openbeacon-map-test-{}", std::process::id()));
@@ -68,6 +84,22 @@ mod tests {
         assert!(read_range(&path, 0, MAX_RANGE + 1).is_err());
         std::fs::remove_file(path).unwrap();
     }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn stage_extractor(source: &Path, directory: &Path) -> Result<tempfile::TempPath, String> {
+    use std::os::unix::fs::PermissionsExt;
+    let input = File::open(source).map_err(|e| format!("Map downloader unavailable: {e}"))?;
+    let mut decoder = flate2::read::GzDecoder::new(input).take(64 * 1024 * 1024 + 1);
+    let mut staged = tempfile::NamedTempFile::new_in(directory).map_err(|e| e.to_string())?;
+    let bytes = std::io::copy(&mut decoder, &mut staged)
+        .map_err(|e| format!("Could not unpack map downloader: {e}"))?;
+    if bytes == 0 || bytes > 64 * 1024 * 1024 {
+        return Err("Bundled map downloader has an invalid size.".into());
+    }
+    std::fs::set_permissions(staged.path(), std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| e.to_string())?;
+    Ok(staged.into_temp_path())
 }
 
 use std::sync::{
@@ -131,7 +163,7 @@ pub async fn download_region_map(
             return Err("Map downloading is currently available on Linux x86-64 only.".into());
             #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
             {
-                use std::os::unix::{fs::PermissionsExt, process::CommandExt};
+                use std::os::unix::process::CommandExt;
                 let dir = app
                     .path()
                     .app_data_dir()
@@ -149,16 +181,11 @@ pub async fn download_region_map(
                     .path()
                     .resource_dir()
                     .map_err(|e| e.to_string())?
-                    .join("pmtiles-linux-x86_64");
+                    .join("pmtiles-linux-x86_64.gz");
                 let dev =
-                    Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/pmtiles-linux-x86_64");
+                    Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/pmtiles-linux-x86_64.gz");
                 let binary = if binary.is_file() { binary } else { dev };
-                let staged = tempfile::NamedTempFile::new_in(&dir).map_err(|e| e.to_string())?;
-                std::fs::copy(binary, staged.path())
-                    .map_err(|e| format!("Map downloader unavailable: {e}"))?;
-                std::fs::set_permissions(staged.path(), std::fs::Permissions::from_mode(0o700))
-                    .map_err(|e| e.to_string())?;
-                let staged_path = staged.into_temp_path();
+                let staged_path = stage_extractor(&binary, &dir)?;
                 let output_path = output.path().to_owned();
                 let mut command = std::process::Command::new(&staged_path);
                 command

@@ -1,3 +1,8 @@
+import { migrateTncSelection, serialModels, type TncKind } from "./tnc-options";
+import {
+  smartBeaconDecision,
+  type SmartBeaconSettings,
+} from "./beacon-schedule";
 import { feature as topoFeature } from "topojson-client";
 import type { Topology } from "topojson-specification";
 import countriesData from "./data/maps/countries.json";
@@ -5,6 +10,8 @@ import statesData from "./data/maps/us-states.json";
 import {
   temperature as formatTemp,
   speedKnots,
+  speedMph,
+  pressure as formatPressure,
   kmToMiles,
   milesToKm,
   type Units,
@@ -15,7 +22,12 @@ import { appShell } from "./shell";
 import * as maplibre from "maplibre-gl";
 import mapWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
 import { Protocol, PMTiles, FileSource } from "pmtiles";
-import { desktop, type ConnectionSettings, type Theme } from "./desktop";
+import {
+  desktop,
+  type ConnectionSettings,
+  type Theme,
+  type WeatherObservation,
+} from "./desktop";
 import { StationStore } from "./stations";
 import { MessageInbox } from "./messages";
 import { showPacket } from "./packet-view";
@@ -77,6 +89,7 @@ function startApp() {
     updateRadiusUnits();
     setRadius(km);
     updateDetails();
+    if (!el("packets-panel").hidden) renderMonitor();
     if (!el("weather-panel").hidden) {
       renderWeatherStations();
       void refreshForecast();
@@ -443,6 +456,15 @@ function startApp() {
       dirty = false;
     }
   }, 500);
+  function distanceAway(lat: number, lon: number): string {
+    if (!configuredLocation) return "—";
+    const meters = new maplibre.LngLat(
+      configuredLocation.lon,
+      configuredLocation.lat,
+    ).distanceTo(new maplibre.LngLat(lon, lat));
+    const km = meters / 1000;
+    return `${(units === "metric" ? km : kmToMiles(km)).toFixed(1)} ${units === "metric" ? "km" : "mi"}`;
+  }
   function updateDetails() {
     if (!selected) return;
     const s = stations.get(selected);
@@ -472,6 +494,7 @@ function startApp() {
       ],
       ["Last received", new Date(s.heardAt).toLocaleString()],
       ["Position", `${s.latitude.toFixed(4)}°, ${s.longitude.toFixed(4)}°`],
+      ["Distance away", distanceAway(s.latitude, s.longitude)],
       ["Symbol", s.symbol],
       ["Position type", s.kind.replaceAll("_", " ")],
       [
@@ -998,6 +1021,9 @@ function startApp() {
         packet.source || "—",
         packet.message?.addressee || packet.destination || "—",
         packet.kind.replaceAll("_", " "),
+        packet.position
+          ? distanceAway(packet.position.latitude, packet.position.longitude)
+          : "—",
         summary,
       ];
       values.forEach((value, index) => {
@@ -1130,6 +1156,270 @@ function startApp() {
     void refreshForecast();
   };
   el("refresh-weather").onclick = () => void refreshForecast();
+  let weatherReady = false;
+  let weatherBeaconActive = false;
+  let weatherBeaconBusy = false;
+  let weatherBeaconGeneration = 0;
+  let weatherBeaconTimer: ReturnType<typeof setTimeout> | null = null;
+  const weatherStatus = el("weather-source-status");
+  const weatherSend = el<HTMLButtonElement>("weather-send");
+  function weatherSourceBusy(busy: boolean) {
+    for (const id of [
+      "weather-wu-save",
+      "weather-wu-clear",
+      "weather-wu-refresh",
+      "weather-peet-read",
+    ])
+      el<HTMLButtonElement>(id).disabled = busy || weatherBeaconActive;
+    weatherSend.disabled = busy || weatherBeaconActive || !weatherReady;
+    el<HTMLButtonElement>("weather-beacon-start").disabled =
+      busy || weatherBeaconActive;
+  }
+  function resetWeather() {
+    weatherReady = false;
+    weatherSend.disabled = true;
+    el("weather-observation").textContent = "";
+    el("weather-send-status").textContent = "";
+  }
+  void desktop
+    .weatherStationSaved()
+    .then((station) => {
+      if (station) {
+        el<HTMLInputElement>("weather-wu-station").value = station;
+        weatherStatus.textContent = `Saved source: ${station}. Select Get current weather to load an observation.`;
+      }
+    })
+    .catch(() => {
+      weatherStatus.textContent = "Could not read saved weather source.";
+    });
+  el("weather-wu-save").onclick = async () => {
+    resetWeather();
+    weatherSourceBusy(true);
+    try {
+      const station = el<HTMLInputElement>("weather-wu-station").value;
+      const key = el<HTMLInputElement>("weather-wu-key").value;
+      await desktop.saveWeatherCredentials(station, key);
+      el<HTMLInputElement>("weather-wu-key").value = "";
+      weatherStatus.textContent =
+        "Source saved. Select Get current weather to check it.";
+    } catch (error) {
+      weatherStatus.textContent = String(error);
+    } finally {
+      weatherSourceBusy(false);
+    }
+  };
+  el("weather-wu-clear").onclick = async () => {
+    resetWeather();
+    weatherSourceBusy(true);
+    try {
+      await desktop.clearWeatherCredentials();
+      el<HTMLInputElement>("weather-wu-station").value = "";
+      el<HTMLInputElement>("weather-wu-key").value = "";
+      weatherStatus.textContent = "Weather Underground source removed.";
+    } catch (error) {
+      weatherStatus.textContent = String(error);
+    } finally {
+      weatherSourceBusy(false);
+    }
+  };
+  function showWeatherObservation(obs: WeatherObservation) {
+    weatherReady = true;
+    weatherSend.disabled = weatherBeaconActive || weatherBeaconBusy;
+    weatherStatus.textContent = `${obs.source} · observed ${new Date(obs.observedAt * 1000).toLocaleString()} · ${obs.lat.toFixed(4)}°, ${obs.lon.toFixed(4)}°${obs.sourceLastChangeAt == null ? "" : ` · last change detected ${new Date(obs.sourceLastChangeAt * 1000).toLocaleTimeString()}`}`;
+    const value = (v: number | null, unit: string) =>
+      v == null ? "unavailable" : `${Math.round(v * 10) / 10}${unit}`;
+    el("weather-observation").textContent =
+      `Temperature: ${obs.temperature == null ? "unavailable" : formatTemp(obs.temperature, units)} · Wind: ${obs.windSpeed == null ? "unavailable" : speedMph(obs.windSpeed, units)} from ${value(obs.windDirection, "°")} · Gust: ${obs.windGust == null ? "unavailable" : speedMph(obs.windGust, units)} · Humidity: ${value(obs.humidity, "%")} · Pressure: ${obs.pressureHpa == null ? "unavailable" : formatPressure(obs.pressureHpa * 10, units)}`;
+  }
+  el("weather-wu-refresh").onclick = async () => {
+    resetWeather();
+    weatherSourceBusy(true);
+    weatherStatus.textContent = "Getting current weather…";
+    try {
+      const obs = await desktop.fetchWeather();
+      showWeatherObservation(obs);
+    } catch (error) {
+      weatherStatus.textContent = String(error);
+    } finally {
+      weatherSourceBusy(false);
+    }
+  };
+  const peetPorts = el<HTMLSelectElement>("weather-peet-port");
+  peetPorts.onchange = () => {
+    el("weather-peet-custom-label").hidden = peetPorts.value !== "custom";
+  };
+  el("weather-peet-refresh-ports").onclick = async () => {
+    try {
+      const devices = await desktop.listSerialDevices();
+      peetPorts.replaceChildren(new Option("Enter port manually", "custom"));
+      for (const device of devices)
+        peetPorts.add(new Option(device.name, device.id));
+      weatherStatus.textContent = devices.length
+        ? "Select the weather station serial device."
+        : "No serial devices found; enter a port manually.";
+    } catch (error) {
+      weatherStatus.textContent = String(error);
+    }
+  };
+  el("weather-peet-read").onclick = async () => {
+    resetWeather();
+    weatherSourceBusy(true);
+    weatherStatus.textContent =
+      "Listening for Ultimeter data for up to 15 seconds…";
+    try {
+      if (!configuredLocation)
+        throw new Error(
+          "Set the weather station location in My Station first.",
+        );
+      const port =
+        peetPorts.value === "custom"
+          ? el<HTMLInputElement>("weather-peet-custom").value.trim()
+          : peetPorts.value;
+      const obs = await desktop.readPeetWeather(
+        port,
+        configuredLocation.lat,
+        configuredLocation.lon,
+      );
+      showWeatherObservation(obs);
+    } catch (error) {
+      weatherStatus.textContent = String(error);
+    } finally {
+      weatherSourceBusy(false);
+    }
+  };
+  const wxInterval = el<HTMLInputElement>("weather-beacon-interval");
+  const wxSource = el<HTMLSelectElement>("weather-beacon-source");
+  const wxRoute = el<HTMLSelectElement>("weather-tx-route");
+  const wxStart = el<HTMLButtonElement>("weather-beacon-start");
+  const wxStop = el<HTMLButtonElement>("weather-beacon-stop");
+  const wxScheduleStatus = el("weather-beacon-status");
+  const storedWxInterval = Number(
+    localStorage.getItem("openbeacon-weather-interval"),
+  );
+  if (
+    Number.isInteger(storedWxInterval) &&
+    storedWxInterval >= 5 &&
+    storedWxInterval <= 1440
+  )
+    wxInterval.value = String(storedWxInterval);
+  function syncWeatherBeaconControls() {
+    wxStart.disabled = weatherBeaconActive || weatherBeaconBusy;
+    wxStop.disabled = !weatherBeaconActive;
+    wxInterval.disabled = weatherBeaconActive;
+    wxSource.disabled = weatherBeaconActive;
+    wxRoute.disabled = weatherBeaconActive;
+    weatherSourceBusy(weatherBeaconBusy);
+  }
+  function stopWeatherBeacon(message: string) {
+    weatherBeaconActive = false;
+    weatherBeaconGeneration++;
+    if (weatherBeaconTimer !== null) clearTimeout(weatherBeaconTimer);
+    weatherBeaconTimer = null;
+    wxScheduleStatus.textContent = message;
+    syncWeatherBeaconControls();
+  }
+  wxStop.onclick = () =>
+    stopWeatherBeacon(
+      "Weather beacon stopped. A packet already handed to the TNC may still transmit.",
+    );
+  wxStart.onclick = () => {
+    if (weatherBeaconActive || weatherBeaconBusy) return;
+    if (!wxInterval.value || !wxInterval.reportValidity()) return;
+    if (!savedCallsign) {
+      wxScheduleStatus.textContent = "Set your callsign in My Station first.";
+      return;
+    }
+    const source = wxSource.value,
+      route = wxRoute.value,
+      call = savedCallsign,
+      path = savedRfPath;
+    const location = configuredLocation
+      ? { lat: configuredLocation.lat, lon: configuredLocation.lon }
+      : null;
+    const port =
+      peetPorts.value === "custom"
+        ? el<HTMLInputElement>("weather-peet-custom").value.trim()
+        : peetPorts.value;
+    if (source === "peet" && (!location || !port)) {
+      wxScheduleStatus.textContent =
+        "Set your station location and select a Peet Bros serial port first.";
+      return;
+    }
+    const interval = Number(wxInterval.value) * 60000;
+    localStorage.setItem("openbeacon-weather-interval", wxInterval.value);
+    const generation = ++weatherBeaconGeneration;
+    weatherBeaconActive = true;
+    syncWeatherBeaconControls();
+    const run = async () => {
+      if (!weatherBeaconActive || generation !== weatherBeaconGeneration)
+        return;
+      if (
+        call !== savedCallsign ||
+        path !== savedRfPath ||
+        (source === "peet" &&
+          (!configuredLocation ||
+            configuredLocation.lat !== location?.lat ||
+            configuredLocation.lon !== location?.lon))
+      ) {
+        stopWeatherBeacon(
+          "Weather beacon stopped because My Station settings changed. Start it again to use the new settings.",
+        );
+        return;
+      }
+      weatherBeaconBusy = true;
+      syncWeatherBeaconControls();
+      wxScheduleStatus.textContent = "Checking weather before transmission…";
+      try {
+        const obs =
+          source === "wu"
+            ? await desktop.fetchWeather()
+            : await desktop.readPeetWeather(port, location!.lat, location!.lon);
+        if (!weatherBeaconActive || generation !== weatherBeaconGeneration)
+          return;
+        showWeatherObservation(obs);
+        const raw = await desktop.sendWeather(call, route, path);
+        if (!weatherBeaconActive || generation !== weatherBeaconGeneration)
+          return;
+        showSentPacket(raw);
+        wxScheduleStatus.textContent = `Weather packet sent to the selected connection at ${new Date().toLocaleTimeString()}.`;
+      } catch (error) {
+        if (weatherBeaconActive && generation === weatherBeaconGeneration) {
+          resetWeather();
+          wxScheduleStatus.textContent = `Weather beacon paused: ${String(error)} It will check again at the next interval.`;
+        }
+      } finally {
+        weatherBeaconBusy = false;
+        if (weatherBeaconActive && generation === weatherBeaconGeneration) {
+          weatherBeaconTimer = setTimeout(() => void run(), interval);
+        }
+        syncWeatherBeaconControls();
+      }
+    };
+    void run();
+  };
+  el("weather-send").onclick = async () => {
+    if (!weatherReady) return;
+    weatherBeaconBusy = true;
+    syncWeatherBeaconControls();
+    try {
+      if (!savedCallsign)
+        throw new Error("Set your callsign in My Station first.");
+      const raw = await desktop.sendWeather(
+        savedCallsign,
+        el<HTMLSelectElement>("weather-tx-route").value,
+        savedRfPath,
+      );
+      showSentPacket(raw);
+      el("weather-send-status").textContent =
+        "Weather packet sent to the selected connection.";
+    } catch (error) {
+      el("weather-send-status").textContent = String(error);
+    } finally {
+      weatherBeaconBusy = false;
+      syncWeatherBeaconControls();
+    }
+  };
+
   function showInbox(bbs: boolean) {
     el("aprs-inbox").hidden = bbs;
     el("bbs-inbox").hidden = !bbs;
@@ -1140,6 +1430,17 @@ function startApp() {
   el("bbs-inbox-tab").onclick = () => showInbox(true);
   el("stations-button").onclick = () => showStations(true);
   el("map-button").onclick = () => showStations(false);
+  map.on("click", () => {
+    if (
+      [
+        "stations-panel",
+        "messages-panel",
+        "weather-panel",
+        "packets-panel",
+      ].some((id) => !el(id).hidden)
+    )
+      showStations(false);
+  });
   el<HTMLInputElement>("station-search").oninput = renderStations;
   el<HTMLInputElement>("station-source").onchange = renderStations;
   for (const layer of ["station-dot", "station-icon"]) {
@@ -1704,7 +2005,12 @@ function startApp() {
   const locationDialog = el<HTMLDialogElement>("location-dialog");
   const locationForm = el<HTMLFormElement>("location-form");
   const featureDialog = el<HTMLDialogElement>("feature-dialog");
-  el("gps-button").onclick = () => locationDialog.showModal();
+  el("gps-button").onclick = () => {
+    void refreshGpsPorts().catch((error) => {
+      el("gps-detail").textContent = String(error);
+    });
+    locationDialog.showModal();
+  };
   el("close-location").onclick = () => locationDialog.close();
   el("close-feature").onclick = () => featureDialog.close();
   el("feature-done").onclick = () => featureDialog.close();
@@ -1731,7 +2037,7 @@ function startApp() {
     localStorage.setItem("openbeacon-tnc-autoconnect", String(autoTnc.checked));
   const tncAudio = el<HTMLInputElement>("tnc-audio");
   type TncSettings = {
-    kind: "direwolf" | "serial" | "kenwood" | "tcp";
+    kind: TncKind;
     device: string;
     port: string;
     baud: number;
@@ -1748,6 +2054,29 @@ function startApp() {
       return null;
     }
   })();
+  if (
+    previousTnc &&
+    ["direwolf", "serial", "kenwood", "tcp"].includes(previousTnc.kind)
+  ) {
+    const oldModel = previousTnc.model;
+    const selection = migrateTncSelection(
+      previousTnc.kind,
+      previousTnc.model || "generic",
+    );
+    previousTnc = {
+      ...previousTnc,
+      kind: selection.kind,
+      model: selection.model,
+    };
+    if (selection.needsReview) {
+      autoTnc.checked = false;
+      localStorage.setItem("openbeacon-tnc-autoconnect", "false");
+      el("tnc-status").textContent =
+        oldModel === "d74"
+          ? "Autoconnect is off. TH-D74/D75 native APRS output is not verified in OpenBeacon; select a supported device and mode before reconnecting."
+          : "Saved TNC selection needs review. Autoconnect is off; choose the correct connection and verify the device mode before reconnecting.";
+    }
+  }
   const tncKind = el<HTMLSelectElement>("tnc-kind");
   const serialPort = el<HTMLSelectElement>("tnc-serial-port");
   const serialCustom = el<HTMLInputElement>("tnc-serial-custom");
@@ -1769,9 +2098,27 @@ function startApp() {
     setBaud(previousTnc.baud || 57600);
     flow.value = previousTnc.flow || "none";
     endpoint.value = previousTnc.endpoint || "127.0.0.1:8001";
-    model.value = previousTnc.model || "generic";
   }
+  let displayedModelKind = "";
   function updateTncKind() {
+    if (
+      (tncKind.value === "serial" || tncKind.value === "kenwood") &&
+      displayedModelKind !== tncKind.value
+    ) {
+      const kind = tncKind.value as "serial" | "kenwood";
+      const initial =
+        !displayedModelKind && previousTnc?.kind === kind
+          ? previousTnc.model
+          : "generic";
+      model.replaceChildren(
+        ...serialModels[kind].map(
+          (option) => new Option(option.label, option.value),
+        ),
+      );
+      model.value = initial || "generic";
+      if (!model.value) model.value = "generic";
+      displayedModelKind = kind;
+    }
     for (const [id, kind] of [
       ["tnc-audio-options", "direwolf"],
       [
@@ -1793,16 +2140,14 @@ function startApp() {
     endpoint.required = tncKind.value === "tcp";
     el("tnc-model-note").textContent =
       tncKind.value === "kenwood"
-        ? "Native monitor mode reads TNC2-style text without setup commands. Enable monitoring on the TNC; output varies by settings. TS-2000 shares its COM port with CAT. Non-packet text is shown in Traffic Monitor."
+        ? model.value === "ts2000"
+          ? "TS-2000 native packet mode: enable Menu 55 and the internal TNC. The rear COM port is shared with CAT. This setup was tested at 57600 baud with hardware flow control; verify your radio settings."
+          : model.value === "d710"
+            ? "TM-D710 native APRS monitor text is receive-only and has not been verified with this model. Enable PC APRS output/monitoring on the radio; OpenBeacon does not configure radio modes."
+            : "Receive-only TNC2-style monitor text. Enable compatible monitoring on the TNC; OpenBeacon does not configure its mode. Non-packet text appears in Traffic Monitor."
         : model.value === "nucleotnc"
           ? "NucleoTNC uses serial KISS at 38400 baud, 8N1, with no flow control. On Linux the ST-Link serial device is commonly /dev/ttyACM0."
-          : model.value === "ts2000"
-            ? "TS-2000: the rear COM port is shared with CAT. KISS mode requires an operator-led setup and power cycle; OpenBeacon will not change modes. Groundside observed 57600 baud with RTS/CTS on this setup; verify before connecting."
-            : model.value === "d710"
-              ? "TM-D710: enter KISS mode using the documented model-specific procedure. OpenBeacon will not send setup commands."
-              : model.value === "d74"
-                ? "TH-D74/D75: select KISS mode and USB or Bluetooth on the radio; legacy KISS ON / RESTART commands are not needed."
-                : "Place the TNC in KISS mode before connecting. OpenBeacon sends no setup or mode commands.";
+          : "Place the TNC in KISS mode before connecting. OpenBeacon sends no setup or mode commands.";
   }
   async function refreshSerialPorts(initial?: string) {
     const wanted =
@@ -1831,7 +2176,9 @@ function startApp() {
         `Could not list serial ports: ${String(error)}`;
     }
   }
-  tncKind.onchange = updateTncKind;
+  tncKind.onchange = () => {
+    updateTncKind();
+  };
   serialPort.onchange = updateTncKind;
   baud.onchange = updateTncKind;
   model.onchange = () => {
@@ -1974,9 +2321,88 @@ function startApp() {
     el("tnc-dot").className = "";
     el<HTMLButtonElement>("tnc-connect").disabled = tncStarting;
   };
+  type GpsFix = {
+    lat: number;
+    lon: number;
+    speedKnots: number | null;
+    course: number | null;
+    receivedAt: number;
+  };
+  let gpsFix: GpsFix | null = null;
+  let gpsWanted = false,
+    gpsGeneration = 0;
+  const gpsPort = el<HTMLSelectElement>("gps-port");
+  const gpsCustom = el<HTMLInputElement>("gps-custom");
+  const gpsBaud = el<HTMLSelectElement>("gps-baud");
+  function freshGps(): GpsFix | null {
+    return gpsFix &&
+      Date.now() - gpsFix.receivedAt >= 0 &&
+      Date.now() - gpsFix.receivedAt <= 15000
+      ? gpsFix
+      : null;
+  }
+  async function refreshGpsPorts() {
+    const devices = await desktop.listSerialDevices();
+    const previous = gpsPort.value;
+    gpsPort.replaceChildren();
+    for (const device of devices) {
+      const option = document.createElement("option");
+      option.value = device.id;
+      option.textContent = device.name;
+      gpsPort.append(option);
+    }
+    const custom = document.createElement("option");
+    custom.value = "custom";
+    custom.textContent = "Enter port manually";
+    gpsPort.append(custom);
+    gpsPort.value = devices.some((d) => d.id === previous)
+      ? previous
+      : "custom";
+    el("gps-custom-label").hidden = gpsPort.value !== "custom";
+  }
+  gpsPort.onchange = () => {
+    el("gps-custom-label").hidden = gpsPort.value !== "custom";
+  };
+  el("gps-refresh").onclick = () =>
+    void refreshGpsPorts().catch((error) => {
+      el("gps-detail").textContent = String(error);
+    });
+  el("gps-connect").onclick = async () => {
+    const port =
+      gpsPort.value === "custom" ? gpsCustom.value.trim() : gpsPort.value;
+    if (!port) {
+      el("gps-detail").textContent = "Choose a GPS serial port.";
+      return;
+    }
+    gpsWanted = true;
+    gpsFix = null;
+    try {
+      gpsGeneration = await desktop.connectGps(port, Number(gpsBaud.value));
+    } catch (error) {
+      gpsWanted = false;
+      el("gps-detail").textContent = String(error);
+    }
+  };
+  el("gps-disconnect").onclick = async () => {
+    gpsWanted = false;
+    gpsFix = null;
+    await desktop.disconnectGps();
+    el("gps-detail").textContent = "GPS disconnected.";
+    el("gps-status").textContent = configuredLocation
+      ? "Manual location"
+      : "Set location";
+    el("gps-dot").className = configuredLocation ? "green" : "";
+    if (configuredLocation)
+      showConfiguredLocation(configuredLocation.lat, configuredLocation.lon);
+    if (mobileActive)
+      stopBeaconSchedule("SmartBeaconing stopped: GPS disconnected.");
+  };
   const beaconDialog = el<HTMLDialogElement>("beacon-dialog");
   let beaconSending = false;
   let beaconScheduleActive = false;
+  let mobileActive = false;
+  let lastMobileTime = 0,
+    lastMobileCourse = 0;
   let beaconScheduleGeneration = 0;
   let beaconTimer: ReturnType<typeof setTimeout> | undefined;
   const intervalInput = el<HTMLInputElement>("beacon-interval");
@@ -1991,30 +2417,36 @@ function startApp() {
     intervalInput.value = String(savedInterval);
   function stopBeaconSchedule(reason = "Automatic beaconing stopped.") {
     beaconScheduleActive = false;
+    mobileActive = false;
     beaconScheduleGeneration++;
     clearTimeout(beaconTimer);
     el("beacon-schedule-state").textContent = reason;
+    el("mobile-beacon-state").textContent = reason;
     el("tx-button").querySelector("small")!.textContent = "APRS-IS";
     updateBeaconMode();
   }
-  async function sendConfiguredBeacon() {
-    if (!configuredLocation)
-      throw new Error("Set your station location first.");
+  async function sendConfiguredBeacon(fix?: GpsFix) {
+    const location = fix ?? configuredLocation;
+    if (!location) throw new Error("Set your station location first.");
     return el<HTMLSelectElement>("beacon-route").value === "rf"
       ? desktop.sendRfBeacon(
           savedCallsign,
-          configuredLocation.lat,
-          configuredLocation.lon,
+          location.lat,
+          location.lon,
           savedSymbol,
           savedComment,
           savedRfPath,
+          fix?.speedKnots ?? null,
+          fix?.course ?? null,
         )
       : desktop.sendPositionBeacon(
           savedCallsign,
-          configuredLocation.lat,
-          configuredLocation.lon,
+          location.lat,
+          location.lon,
           savedSymbol,
           savedComment,
+          fix?.speedKnots ?? null,
+          fix?.course ?? null,
         );
   }
   function beaconRouteLabel() {
@@ -2085,6 +2517,144 @@ function startApp() {
       el("beacon-schedule-state").textContent = String(error);
     }
   }
+  const smartIds = [
+    "smart-slow-speed",
+    "smart-fast-speed",
+    "smart-slow-interval",
+    "smart-fast-interval",
+    "smart-turn-angle",
+    "smart-turn-slope",
+    "smart-turn-time",
+  ];
+  try {
+    const saved = JSON.parse(
+      localStorage.getItem("openbeacon-smart-settings") || "{}",
+    );
+    for (const id of smartIds)
+      if (typeof saved[id] === "number" && Number.isFinite(saved[id]))
+        el<HTMLInputElement>(id).value = String(saved[id]);
+  } catch {
+    /* use defaults */
+  }
+  function smartSettings(): SmartBeaconSettings | null {
+    if (!smartIds.every((id) => el<HTMLInputElement>(id).reportValidity()))
+      return null;
+    const n = (id: string) => Number(el<HTMLInputElement>(id).value);
+    const settings = {
+      slowSpeed: n("smart-slow-speed"),
+      fastSpeed: n("smart-fast-speed"),
+      slowInterval: n("smart-slow-interval"),
+      fastInterval: n("smart-fast-interval"),
+      minTurnAngle: n("smart-turn-angle"),
+      turnSlope: n("smart-turn-slope"),
+      minTurnTime: n("smart-turn-time"),
+    };
+    return settings.fastSpeed > settings.slowSpeed &&
+      settings.slowInterval >= settings.fastInterval
+      ? settings
+      : null;
+  }
+  async function sendMobileFix(generation: number, fix: GpsFix) {
+    if (
+      beaconSending ||
+      !mobileActive ||
+      generation !== beaconScheduleGeneration
+    )
+      return;
+    beaconSending = true;
+    updateBeaconMode();
+    try {
+      if (
+        Date.now() - fix.receivedAt > 15000 ||
+        !freshGps() ||
+        fix.speedKnots == null ||
+        fix.course == null
+      )
+        throw new Error("GPS fix is missing or stale.");
+      const raw = await sendConfiguredBeacon(fix);
+      showSentPacket(raw);
+      if (generation !== beaconScheduleGeneration) return;
+      lastMobileTime = performance.now();
+      lastMobileCourse = fix.course;
+      el("mobile-beacon-state").textContent =
+        `SmartBeaconing active · last beacon ${new Date().toLocaleTimeString()}`;
+    } catch (error) {
+      if (generation === beaconScheduleGeneration)
+        stopBeaconSchedule(`SmartBeaconing stopped: ${String(error)}`);
+    } finally {
+      beaconSending = false;
+      updateBeaconMode();
+    }
+  }
+  el("mobile-start").onclick = async () => {
+    if (beaconSending || beaconScheduleActive || !savedCallsign) return;
+    const fix = freshGps(),
+      settings = smartSettings();
+    if (!fix || fix.speedKnots == null || fix.course == null || !settings) {
+      el("mobile-beacon-state").textContent =
+        "A fresh GPS fix with speed and course and valid SmartBeaconing settings are required.";
+      return;
+    }
+    const generation = ++beaconScheduleGeneration;
+    try {
+      if (
+        beaconRouteLabel() === "APRS-IS" &&
+        !(await desktop.aprsPasscodeSaved(savedCallsign))
+      )
+        throw new Error("Save an APRS-IS passcode in My Station first.");
+      if (generation !== beaconScheduleGeneration || !freshGps()) return;
+      localStorage.setItem(
+        "openbeacon-smart-settings",
+        JSON.stringify(
+          Object.fromEntries(
+            smartIds.map((id) => [id, Number(el<HTMLInputElement>(id).value)]),
+          ),
+        ),
+      );
+      beaconScheduleActive = true;
+      mobileActive = true;
+      lastMobileTime = 0;
+      el("tx-button").querySelector("small")!.textContent =
+        `Mobile · ${beaconRouteLabel()}`;
+      updateBeaconMode();
+      void sendMobileFix(generation, fix);
+    } catch (error) {
+      el("mobile-beacon-state").textContent = String(error);
+    }
+  };
+  el("mobile-stop").onclick = () =>
+    stopBeaconSchedule(
+      beaconSending
+        ? "Stopped; a send already in progress may still complete."
+        : "SmartBeaconing stopped.",
+    );
+  setInterval(() => {
+    const fix = freshGps();
+    if (gpsWanted && !fix) {
+      el("gps-status").textContent = "Waiting for GPS";
+      el("gps-dot").className = "amber";
+    }
+    if (!mobileActive) return;
+    if (!fix || fix.speedKnots == null || fix.course == null) {
+      stopBeaconSchedule(
+        "SmartBeaconing stopped: GPS fix is missing or stale.",
+      );
+      return;
+    }
+    const settings = smartSettings();
+    if (
+      settings &&
+      lastMobileTime &&
+      smartBeaconDecision(
+        settings,
+        fix.speedKnots * 1.150779448,
+        fix.course,
+        lastMobileCourse,
+        (performance.now() - lastMobileTime) / 1000,
+      )
+    )
+      void sendMobileFix(beaconScheduleGeneration, fix);
+  }, 1000);
   el("beacon-start").onclick = () => void startAutoBeacon();
   el("beacon-stop").onclick = () =>
     stopBeaconSchedule(
@@ -2150,6 +2720,11 @@ function startApp() {
       !configuredLocation ||
       !savedCallsign;
     el<HTMLButtonElement>("beacon-stop").disabled = !beaconScheduleActive;
+    el<HTMLButtonElement>("mobile-start").disabled =
+      beaconSending || beaconScheduleActive || !savedCallsign || !freshGps();
+    el<HTMLButtonElement>("mobile-stop").disabled = !mobileActive;
+    for (const id of smartIds)
+      el<HTMLInputElement>(id).disabled = beaconScheduleActive;
     intervalInput.disabled = beaconScheduleActive;
     el<HTMLSelectElement>("beacon-mode").disabled = beaconScheduleActive;
     el<HTMLSelectElement>("beacon-route").disabled = beaconScheduleActive;
@@ -2506,6 +3081,8 @@ function startApp() {
       settings.location_set !== false
         ? { lat: settings.lat, lon: settings.lon, radius: settings.radius }
         : null;
+    updateDetails();
+    if (!el("packets-panel").hidden) renderMonitor();
     if (!el("weather-panel").hidden) void refreshForecast();
     if (configuredLocation) {
       showConfiguredLocation(settings.lat, settings.lon);
@@ -2612,6 +3189,25 @@ function startApp() {
     }
   }
   const listenersReady = Promise.all([
+    desktop.onGpsStatus((payload) => {
+      if (!gpsWanted || payload.generation < gpsGeneration) return;
+      gpsGeneration = payload.generation;
+      el("gps-detail").textContent = payload.message;
+      if (payload.state === "fix" && payload.fix) {
+        gpsFix = payload.fix;
+        el("gps-status").textContent = "GPS fix";
+        el("gps-dot").className = "green";
+        showConfiguredLocation(payload.fix.lat, payload.fix.lon);
+        if (beaconDialog.open) updateBeaconMode();
+      } else if (payload.state === "error") {
+        gpsWanted = false;
+        gpsFix = null;
+        el("gps-status").textContent = "GPS error";
+        el("gps-dot").className = "amber";
+        if (mobileActive)
+          stopBeaconSchedule("SmartBeaconing stopped: GPS connection failed.");
+      }
+    }),
     desktop.onTncStatus((payload) => {
       if (!tncWanted || payload.generation < tncGeneration) return;
       tncGeneration = payload.generation;

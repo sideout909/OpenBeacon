@@ -139,6 +139,46 @@ fn weather(report: Weather<'_>) -> WeatherReport {
         raw: text(report.report),
     }
 }
+// APRS 1.0.1 permits a space in the compressed course byte to indicate no
+// course/speed data. The upstream parser currently requires base91 there.
+fn compressed_without_motion(payload: &[u8]) -> Option<PositionReport> {
+    let start = match *payload.first()? {
+        b'!' | b'=' => 1,
+        b'/' | b'@' => 8,
+        _ => return None,
+    };
+    let p = payload.get(start..)?;
+    if p.len() < 13 || p[10] != b' ' {
+        return None;
+    }
+    let symbol = printable_symbol(p[0], p[9])?;
+    let decode = |bytes: &[u8]| -> Option<f64> {
+        bytes
+            .iter()
+            .try_fold(0u32, |n, &b| {
+                if (b'!'..=b'{').contains(&b) {
+                    Some(n * 91 + u32::from(b - b'!'))
+                } else {
+                    None
+                }
+            })
+            .map(f64::from)
+    };
+    let coords = valid_coords(Coordinates {
+        latitude: 90.0 - decode(&p[1..5])? / 380926.0,
+        longitude: -180.0 + decode(&p[5..9])? / 190463.0,
+    })?;
+    Some(PositionReport {
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+        symbol,
+        comment: text(&p[13..]),
+        ambiguity: 0,
+        timestamp: (start == 8).then(|| text(&payload[1..8])),
+        speed_knots: None,
+        course_degrees: None,
+    })
+}
 /// Parse uncompressed position ambiguity, preserving its precision instead of pretending it is exact.
 fn ambiguous_position(payload: &[u8]) -> Option<PositionReport> {
     let start = match *payload.first()? {
@@ -371,7 +411,10 @@ pub fn decode_tnc2(bytes: &[u8]) -> DecodedPacket {
             out.warnings.push("Item display is not implemented".into());
         }
         AprsData::Malformed { .. } => {
-            if let Some(p) = ambiguous_position(packet.payload()) {
+            if let Some(p) = compressed_without_motion(packet.payload()) {
+                out.position = Some(p);
+                out.kind = "compressed_position".into();
+            } else if let Some(p) = ambiguous_position(packet.payload()) {
                 out.position = Some(p);
                 out.kind = "ambiguous_position".into();
                 out.warnings

@@ -39,6 +39,44 @@ pub(crate) fn position(lat: f64, lon: f64, symbol: &str) -> Result<String, Strin
         chars[1]
     ))
 }
+pub(crate) fn position_payload(
+    lat: f64,
+    lon: f64,
+    symbol: &str,
+    comment: &str,
+    speed_knots: Option<f64>,
+    course: Option<f64>,
+) -> Result<String, String> {
+    if comment.len() > 40 || !comment.bytes().all(|b| (32..=126).contains(&b)) {
+        return Err("Beacon comment must be at most 40 printable ASCII characters".into());
+    }
+    let motion = match (speed_knots, course) {
+        (Some(speed), Some(direction))
+            if speed.is_finite()
+                && (0.0..=999.0).contains(&speed)
+                && direction.is_finite()
+                && (0.0..360.0).contains(&direction) =>
+        {
+            format!(
+                "{:03}/{:03}",
+                if direction.round() == 0.0 {
+                    360
+                } else {
+                    direction.round() as u32
+                },
+                speed.round() as u32
+            )
+        }
+        (None, None) => String::new(),
+        _ => return Err("Invalid GPS speed or course".into()),
+    };
+    Ok(format!(
+        "{}{}{}",
+        position(lat, lon, symbol)?,
+        motion,
+        comment
+    ))
+}
 pub(crate) fn transmit(call: &str, passcode: &str, payload: &str) -> Result<String, String> {
     let address = ("rotate.aprs2.net", 14580)
         .to_socket_addrs()
@@ -175,6 +213,7 @@ pub fn clear_aprs_passcode(app: tauri::AppHandle) -> Result<(), String> {
     }
 }
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn send_position_beacon(
     app: tauri::AppHandle,
     callsign: String,
@@ -182,6 +221,8 @@ pub async fn send_position_beacon(
     lon: f64,
     symbol: String,
     comment: String,
+    speed_knots: Option<f64>,
+    course: Option<f64>,
 ) -> Result<String, String> {
     let call = callsign.trim().to_ascii_uppercase();
     let mut parts = call.split('-');
@@ -198,10 +239,7 @@ pub async fn send_position_beacon(
     if passcode.is_empty() || passcode.len() > 5 || !passcode.bytes().all(|b| b.is_ascii_digit()) {
         return Err("Enter a valid APRS-IS passcode".into());
     }
-    if comment.len() > 40 || !comment.bytes().all(|b| (32..=126).contains(&b)) {
-        return Err("Beacon comment must be at most 40 printable ASCII characters".into());
-    }
-    let payload = format!("{}{}", position(lat, lon, &symbol)?, comment);
+    let payload = position_payload(lat, lon, &symbol, &comment, speed_knots, course)?;
     tauri::async_runtime::spawn_blocking(move || transmit(&call, &passcode, &payload))
         .await
         .map_err(|e| e.to_string())?

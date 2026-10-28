@@ -29,7 +29,49 @@ export interface PacketBatch {
   generation: number;
 }
 
+export type WeatherObservation = {
+  source: string;
+  observedAt: number;
+  lat: number;
+  lon: number;
+  temperature: number | null;
+  windDirection: number | null;
+  windSpeed: number | null;
+  windGust: number | null;
+  humidity: number | null;
+  pressureHpa: number | null;
+  sourceLastChangeAt: number | null;
+};
 export const desktop = {
+  saveWeatherCredentials: (station: string, key: string) =>
+    invoke<void>("save_weather_credentials", { station, key }),
+  weatherStationSaved: () => invoke<string | null>("weather_station_saved"),
+  clearWeatherCredentials: () => invoke<void>("clear_weather_credentials"),
+  fetchWeather: () => invoke<WeatherObservation>("fetch_weather"),
+  readPeetWeather: (port: string, lat: number, lon: number) =>
+    invoke<WeatherObservation>("read_peet_weather", { port, lat, lon }),
+  sendWeather: (callsign: string, route: string, path: string) =>
+    invoke<string>("send_weather", { callsign, route, path }),
+  connectGps: (port: string, baud: number) =>
+    invoke<number>("connect_gps", { port, baud }),
+  disconnectGps: () => invoke<void>("disconnect_gps"),
+  onGpsStatus: (
+    handler: (event: {
+      generation: number;
+      state: string;
+      message: string;
+      fix: {
+        lat: number;
+        lon: number;
+        speedKnots: number | null;
+        course: number | null;
+        receivedAt: number;
+      } | null;
+    }) => void,
+  ) =>
+    listen("gps-status", (event) =>
+      handler(event.payload as Parameters<typeof handler>[0]),
+    ),
   listCaptureDevices: () =>
     invoke<{ id: string; name: string }[]>("list_capture_devices"),
   startDirewolf: (audioDevice: string) =>
@@ -70,6 +112,8 @@ export const desktop = {
     lon: number,
     symbol: string,
     comment: string,
+    speedKnots: number | null = null,
+    course: number | null = null,
   ) =>
     invoke<string>("send_position_beacon", {
       callsign,
@@ -77,6 +121,8 @@ export const desktop = {
       lon,
       symbol,
       comment,
+      speedKnots,
+      course,
     }),
   sendRfBeacon: (
     callsign: string,
@@ -85,6 +131,8 @@ export const desktop = {
     symbol: string,
     comment: string,
     path: string,
+    speedKnots: number | null = null,
+    course: number | null = null,
   ) =>
     invoke<string>("send_rf_beacon", {
       callsign,
@@ -93,6 +141,8 @@ export const desktop = {
       symbol,
       comment,
       path,
+      speedKnots,
+      course,
     }),
   sendAprsMessage: (
     callsign: string,

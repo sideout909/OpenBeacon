@@ -1,10 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod beacon;
+mod gps;
 mod history;
 mod maps;
 mod messaging;
 mod tnc;
+mod weather;
 
 use openbeacon_packet::{
     aprs::{decode_tnc2, DecodedPacket, PacketOrigin},
@@ -316,12 +318,22 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             app.manage(Connection::default());
+            app.manage(gps::Gps::default());
+            app.manage(weather::WeatherState::default());
             app.manage(tnc::Tnc::default());
             app.manage(maps::MapDownload::default());
             app.manage(tnc::Modem::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            weather::save_weather_credentials,
+            weather::weather_station_saved,
+            weather::clear_weather_credentials,
+            weather::fetch_weather,
+            weather::read_peet_weather,
+            weather::send_weather,
+            gps::connect_gps,
+            gps::disconnect_gps,
             maps::read_map_range,
             maps::read_downloaded_map,
             maps::download_region_map,
@@ -352,6 +364,7 @@ fn main() {
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
                 tnc::shutdown(app);
+                gps::shutdown(app);
             }
         });
 }
