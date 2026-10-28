@@ -6,7 +6,7 @@ OpenBeacon displays APRS traffic from the internet and from supported radio inte
 
 On Windows, run the OpenBeacon setup installer and follow its prompts. On Linux, mark the OpenBeacon AppImage executable and open it. Portable archives, when provided, must be extracted with their helper programs kept alongside the executable. Windows requires Microsoft Edge WebView2 and the installer may need an internet connection to install it. Linux needs the system WebKitGTK libraries; see the README for development prerequisites. You may need to give your user account access to serial or audio devices.
 
-Map packs are not included. An internet connection is needed to download a map or use an online map. In **Settings → Configure maps**, choose an area and detail level, then download it. Higher zoom levels and larger areas need more storage and can take a long time. Only one downloaded region is retained. You can instead configure online maps using your own Protomaps API key, or open a compatible local PMTiles pack in the map configurator. Windows map downloading requires the included Windows map helper; one successful Windows 11 download has been reported.
+A basic world overview through zoom level 6 is included for offline use. Download a regional map for street-level detail, or use an online map; both require an internet connection. In **Settings → Configure maps**, choose an area and detail level, then download it. Higher zoom levels and larger areas need more storage and can take a long time. Only one downloaded region is retained. You can instead configure online maps using your own Protomaps API key, or open a compatible local PMTiles pack in the map configurator. Windows map downloading requires the included Windows map helper; one successful Windows 11 download has been reported.
 
 ## Software updates
 
@@ -27,7 +27,7 @@ Connect the computer to the **COM port on the control head**, using the appropri
 
 Before connecting OpenBeacon, use a serial terminal configured for the control-head COM port at 9600 baud, 8 data bits, no parity, one stop bit, and no flow control. Press Enter for the `cmd:` prompt, enter `KISS ON`, press Enter, then enter `RESTART` and press Enter. Close the terminal so it releases the port. In OpenBeacon's TNC settings choose **Serial KISS**, select **Kenwood TM-D710 (KISS receive and transmit)**, choose the same port, and connect. These commands change the radio's TNC mode; OpenBeacon does not issue them automatically or exit KISS when disconnected. To exit, disconnect OpenBeacon and use a serial utility to send the three bytes `C0 FF C0` (hex), the exit sequence specified in the [Kenwood guide](https://www.kenwood.com/i/products/info/amateur/pdf/TM-D710A_E_GA_GE_IDM.pdf). Return to the radio's APRS mode if desired. Record any existing radio settings before changing modes.
 
-The owner's D710A has been observed receiving KISS frames, but OpenBeacon transmit through this model has not yet been verified on air. A successful send means the frame was handed to the TNC, not that another station received it. Some installations may supply GPS data only in APRS mode, not while in PACKET/KISS mode.
+The owner reports successful OpenBeacon receive and transmit with a D710A in KISS mode. A successful send means the frame was handed to the TNC, not that another station received it. Some installations may supply GPS data only in APRS mode, not while in PACKET/KISS mode.
 
 ## Explore traffic
 
@@ -55,7 +55,7 @@ For your own station, configure a Weather Underground PWS station ID and API key
 
 ## Troubleshooting
 
-- **No map:** Check your internet connection, map configuration and downloaded region. Online maps require a working API key. A freshly extracted release has no bundled map packs.
+- **No map:** Check your internet connection, map configuration and downloaded region. Online maps require a working API key. The bundled world overview has limited detail; download a region for closer zoom levels.
 - **No APRS-IS stations:** Verify the callsign, GPS fix or manual location, radius and connection status. The radius applies only to the server feed.
 - **No RF packets:** Check the radio frequency, audio or serial connection, TNC mode, baud rate and device permissions. Reception and transmit capabilities vary by interface.
 - **GPS waiting:** Confirm the correct port or network endpoint, valid RMC output, and an actual satellite fix. GPSD and phone GPS support need hardware testing.

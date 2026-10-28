@@ -6,6 +6,7 @@
     ],
     "createUpdaterArtifacts": true,
     "resources": {
+      "../public/maps/world-z6.pmtiles": "maps/world-z6.pmtiles",
       "resources/pmtiles-windows-x86_64.exe": "pmtiles-windows-x86_64.exe",
       "../README.md": "README.md",
       "../USER_GUIDE.md": "USER_GUIDE.md",

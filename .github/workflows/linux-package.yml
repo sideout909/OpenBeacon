@@ -17,7 +17,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev cmake
       - run: npm ci
-      - run: mkdir -p public/maps && touch public/maps/world-z6.pmtiles public/maps/michigan-lower-z12.pmtiles
       - run: scripts/build-direwolf-linux.sh
       - run: npm run check
       - run: npm run tauri build -- --no-bundle
@@ -25,6 +24,7 @@ jobs:
         run: |
           mkdir -p openbeacon-linux-x86_64/maps
           cp src-tauri/target/release/openbeacon-map-test openbeacon-linux-x86_64/openbeacon
+          cp public/maps/world-z6.pmtiles openbeacon-linux-x86_64/maps/
           cp src-tauri/resources/direwolf-linux-x86_64 src-tauri/resources/pmtiles-linux-x86_64.gz openbeacon-linux-x86_64/
           cp README.md USER_GUIDE.md LICENSE THIRD-PARTY-NOTICES.md openbeacon-linux-x86_64/
           cp -a third-party openbeacon-linux-x86_64/

@@ -2,6 +2,7 @@ node_modules/
 dist/
 src-tauri/target/
 *.pmtiles
+!public/maps/world-z6.pmtiles
 
 crates/*/target/
 

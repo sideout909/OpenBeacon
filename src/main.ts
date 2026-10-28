@@ -1650,9 +1650,11 @@ function startApp() {
   const worldUrl = bundledMap("world-z6.pmtiles");
   const demoUrl = bundledMap("michigan-lower-z12.pmtiles");
   map.once("load", async () => {
+    let worldAvailable = false;
     try {
       await protocol.get("bundled-world-z6.pmtiles")?.getHeader();
       addBasemap(map, isDark(), "world", worldUrl, 0);
+      worldAvailable = true;
     } catch {
       el("map-state").textContent = "World overview unavailable";
     }
@@ -1670,8 +1672,9 @@ function startApp() {
         el("map-state").textContent = "Offline map · world + Lower Michigan";
       }
     } catch {
-      el("map-state").textContent =
-        "Local regional map unavailable · configure maps";
+      el("map-state").textContent = worldAvailable
+        ? "Offline map · world overview · download a region for detail"
+        : "Offline map unavailable · configure maps";
     }
     addStationLayers();
     void loadSymbolSheets();
@@ -2079,9 +2082,17 @@ function startApp() {
         localStorage.setItem("openbeacon-map-mode", "bundled");
         el("map-state").textContent = "Offline map · Lower Michigan";
       } catch {
-        el("map-offline-status").textContent =
-          "No saved offline map is available. Download a region first.";
-        return;
+        try {
+          await protocol.get("bundled-world-z6.pmtiles")!.getHeader();
+          removeBasemap(map, "regional");
+          localStorage.setItem("openbeacon-map-mode", "bundled");
+          el("map-state").textContent =
+            "Offline map · world overview · download a region for detail";
+        } catch {
+          el("map-offline-status").textContent =
+            "No saved offline map is available. Download a region first.";
+          return;
+        }
       }
     }
     localStorage.setItem("openbeacon-map-setup", "done");

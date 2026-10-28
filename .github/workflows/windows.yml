@@ -18,11 +18,6 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
-      - name: Prepare build resources
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force public/maps | Out-Null
-          New-Item -ItemType File -Force public/maps/world-z6.pmtiles,public/maps/michigan-lower-z12.pmtiles | Out-Null
       - name: Obtain verified Windows map downloader
         shell: pwsh
         run: |
@@ -41,6 +36,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force openbeacon-windows-x86_64/maps | Out-Null
           Copy-Item src-tauri/target/release/openbeacon-map-test.exe openbeacon-windows-x86_64/OpenBeacon.exe
+          Copy-Item public/maps/world-z6.pmtiles openbeacon-windows-x86_64/maps/
           Copy-Item pmtiles-download/pmtiles.exe openbeacon-windows-x86_64/pmtiles-windows-x86_64.exe
           Copy-Item README.md,USER_GUIDE.md,LICENSE,THIRD-PARTY-NOTICES.md openbeacon-windows-x86_64/
           Copy-Item -Recurse third-party openbeacon-windows-x86_64/

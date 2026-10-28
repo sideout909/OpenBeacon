@@ -6,6 +6,7 @@
     ],
     "createUpdaterArtifacts": true,
     "resources": {
+      "../public/maps/world-z6.pmtiles": "maps/world-z6.pmtiles",
       "resources/pmtiles-linux-x86_64.gz": "pmtiles-linux-x86_64.gz",
       "resources/direwolf-linux-x86_64": "direwolf-linux-x86_64",
       "../README.md": "README.md",
