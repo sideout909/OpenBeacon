@@ -13,7 +13,7 @@ Map packs are not included. An internet connection is needed to download a map o
 1. Open **My Station** and enter your amateur callsign and SSID, then choose a symbol. An RF path and beacon comment are optional. Save your settings.
 2. Open **GPS** and enter your station's latitude and longitude as decimal degrees. This manual location is used for fixed beaconing and the APRS-IS radius filter.
 3. To receive online traffic, open **APRS-IS**, select a radius, and connect. The radius limits the APRS-IS server feed; it does not filter RF packets. Reconnect after changing your filter center.
-4. To receive over the air, open **TNC**, select your interface and device, and connect. Configure your radio and TNC for the correct frequency and mode separately. Serial interfaces may require operating-system permissions. The bundled Dire Wolf audio receiver is Linux x86-64 only; serial and TCP KISS are available separately.
+4. To receive over the air, open **TNC**, select your interface and device, and connect. Configure your radio and TNC for the correct frequency and mode separately. Serial interfaces may require operating-system permissions. The bundled Dire Wolf audio receiver is Linux x86-64 only. Windows users can install and configure Dire Wolf separately, start it, then select **TCP KISS TNC** and connect to its configured address (normally `127.0.0.1:8001`). Dire Wolf handles the audio device and, if transmitting, PTT setup. External Dire Wolf and the Windows connection have not yet been verified with OpenBeacon; use a Dire Wolf version containing the relevant security fixes.
 
 ## Explore traffic
 
@@ -23,7 +23,7 @@ The map plots stations with valid positions. Select a station for its details, d
 
 In **Beacon → Beacon settings**, choose APRS-IS or a supported RF TNC. An APRS-IS passcode is required for APRS-IS transmission and is saved in My Station. Check the station identity, location, symbol, comment and RF path before sending. Use **Send once** or start the fixed-position schedule. The Beacon menu can start or stop an automatic schedule; its indicator is green when a schedule is active. Stopping a schedule cannot recall a packet already handed to a TNC.
 
-For mobile SmartBeaconing, connect a GPS source in **GPS**, choose mobile mode in Beacon settings, review its speed, interval and turn settings, and start it. A fresh GPS fix with speed and course is required. The schedule stops if the fix becomes stale. Mobile operation and RF transmission need further real-hardware testing.
+For mobile SmartBeaconing, connect a GPS source in **GPS**, choose mobile mode in Beacon settings, review its speed, interval and turn settings, and start it. A fresh GPS fix with speed and course is required. The schedule stops if the fix becomes stale. The operator reports successful RF and APRS-IS beaconing over approximately two days (October 28, 2026). Mobile operation and additional hardware combinations need further real-hardware testing.
 
 ## Connect a GPS or phone
 
