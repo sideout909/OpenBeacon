@@ -28,6 +28,10 @@ jobs:
           cp src-tauri/resources/direwolf-linux-x86_64 src-tauri/resources/pmtiles-linux-x86_64.gz openbeacon-linux-x86_64/
           cp README.md USER_GUIDE.md LICENSE THIRD-PARTY-NOTICES.md openbeacon-linux-x86_64/
           cp -a third-party openbeacon-linux-x86_64/
+          mkdir -p openbeacon-linux-x86_64/third-party/{fonts,aprs-symbols,aprs-deviceid}
+          cp public/fonts/OFL.txt openbeacon-linux-x86_64/third-party/fonts/
+          cp public/aprs-symbols/COPYRIGHT.md openbeacon-linux-x86_64/third-party/aprs-symbols/
+          cp src/data/README.md src/data/aprs-deviceid.json openbeacon-linux-x86_64/third-party/aprs-deviceid/
           tar -czf openbeacon-linux-x86_64.tar.gz openbeacon-linux-x86_64
       - uses: actions/upload-artifact@v4
         with:

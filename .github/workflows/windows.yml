@@ -40,6 +40,10 @@ jobs:
           Copy-Item pmtiles-download/pmtiles.exe openbeacon-windows-x86_64/pmtiles-windows-x86_64.exe
           Copy-Item README.md,USER_GUIDE.md,LICENSE,THIRD-PARTY-NOTICES.md openbeacon-windows-x86_64/
           Copy-Item -Recurse third-party openbeacon-windows-x86_64/
+          New-Item -ItemType Directory -Force openbeacon-windows-x86_64/third-party/fonts,openbeacon-windows-x86_64/third-party/aprs-symbols,openbeacon-windows-x86_64/third-party/aprs-deviceid | Out-Null
+          Copy-Item public/fonts/OFL.txt openbeacon-windows-x86_64/third-party/fonts/
+          Copy-Item public/aprs-symbols/COPYRIGHT.md openbeacon-windows-x86_64/third-party/aprs-symbols/
+          Copy-Item src/data/README.md,src/data/aprs-deviceid.json openbeacon-windows-x86_64/third-party/aprs-deviceid/
           & ./openbeacon-windows-x86_64/pmtiles-windows-x86_64.exe version
           if ($LASTEXITCODE -ne 0) { throw 'Map downloader did not run' }
           Compress-Archive -Path openbeacon-windows-x86_64 -DestinationPath openbeacon-windows-x86_64.zip
