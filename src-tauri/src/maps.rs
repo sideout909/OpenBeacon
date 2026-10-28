@@ -71,10 +71,14 @@ fn extract_progress(line: &str) -> Option<u8> {
     (value <= 100).then_some(value)
 }
 
-fn read_extract_progress(mut reader: impl Read, mut update: impl FnMut(u8)) -> std::io::Result<()> {
+fn read_extract_progress(
+    mut reader: impl Read,
+    mut update: impl FnMut(u8),
+) -> std::io::Result<Option<String>> {
     let mut frame = Vec::new();
     let mut discard = false;
     let mut last = None;
+    let mut error_line = None;
     let mut bytes = [0u8; 4096];
     loop {
         let n = reader.read(&mut bytes)?;
@@ -84,14 +88,16 @@ fn read_extract_progress(mut reader: impl Read, mut update: impl FnMut(u8)) -> s
         for &b in &bytes[..n] {
             if b == b'\r' || b == b'\n' {
                 if !discard {
-                    if let Some(percent) =
-                        std::str::from_utf8(&frame).ok().and_then(extract_progress)
-                    {
-                        // The archive still needs to be finalized and checked at 100%.
-                        let percent = percent.min(99);
-                        if last.is_none_or(|previous| percent > previous) {
-                            update(percent);
-                            last = Some(percent);
+                    if let Ok(text) = std::str::from_utf8(&frame) {
+                        if let Some(percent) = extract_progress(text) {
+                            // The archive still needs to be finalized and checked at 100%.
+                            let percent = percent.min(99);
+                            if last.is_none_or(|previous| percent > previous) {
+                                update(percent);
+                                last = Some(percent);
+                            }
+                        } else if text.to_ascii_lowercase().contains("failed to extract") {
+                            error_line = Some(text.trim().chars().take(700).collect());
                         }
                     }
                 }
@@ -104,7 +110,7 @@ fn read_extract_progress(mut reader: impl Read, mut update: impl FnMut(u8)) -> s
             }
         }
     }
-    Ok(())
+    Ok(error_line)
 }
 
 fn read_error_tail(mut reader: impl Read) -> std::io::Result<String> {
@@ -175,6 +181,13 @@ mod tests {
         let mut seen = Vec::new();
         read_extract_progress(&input[..], |value| seen.push(value)).unwrap();
         assert_eq!(seen, [12, 40]);
+    }
+
+    #[test]
+    fn extractor_failure_reported_on_stdout_is_preserved() {
+        let output = b"2026/10/28 main.go:185: Failed to extract, server returned HTTP 503\n";
+        let error = read_extract_progress(&output[..], |_| {}).unwrap().unwrap();
+        assert!(download_failure("exit 1", &error).contains("server returned HTTP 503"));
     }
 
     #[test]
@@ -378,12 +391,14 @@ pub async fn download_region_map(
                     std::thread::spawn(move || read_error_tail(stderr).unwrap_or_default());
                 let progress_app = app.clone();
                 let progress_thread = std::thread::spawn(move || {
-                    let _ = read_extract_progress(stdout, |percent| {
+                    read_extract_progress(stdout, |percent| {
                         let _ = progress_app.emit(
                             "map-download-progress",
                             serde_json::json!({ "requestId": request_id, "percent": percent }),
                         );
-                    });
+                    })
+                    .ok()
+                    .flatten()
                 });
                 loop {
                     if cancel.load(Ordering::SeqCst) {
@@ -396,9 +411,15 @@ pub async fn download_region_map(
                     match child.try_wait().map_err(|e| e.to_string())? {
                         Some(status) if status.success() => break,
                         Some(status) => {
-                            let _ = progress_thread.join();
-                            let detail = error_thread.join().unwrap_or_default();
-                            return Err(download_failure(status, &detail));
+                            let stdout_error =
+                                progress_thread.join().ok().flatten().unwrap_or_default();
+                            let stderr_error = error_thread.join().unwrap_or_default();
+                            let detail = if stderr_error.trim().is_empty() {
+                                &stdout_error
+                            } else {
+                                &stderr_error
+                            };
+                            return Err(download_failure(status, detail));
                         }
                         None => std::thread::sleep(Duration::from_millis(300)),
                     }
