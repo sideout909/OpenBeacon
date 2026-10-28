@@ -2271,9 +2271,11 @@ function startApp() {
           : model.value === "d710"
             ? "TM-D710 native APRS monitor text is receive-only and has not been verified with this model. Enable PC APRS output/monitoring on the radio; OpenBeacon does not configure radio modes."
             : "Receive-only TNC2-style monitor text. Enable compatible monitoring on the TNC; OpenBeacon does not configure its mode. Non-packet text appears in Traffic Monitor."
-        : model.value === "nucleotnc"
-          ? "NucleoTNC uses serial KISS at 38400 baud, 8N1, with no flow control. On Linux the ST-Link serial device is commonly /dev/ttyACM0."
-          : "Place the TNC in KISS mode before connecting. OpenBeacon sends no setup or mode commands.";
+        : model.value === "d710kiss"
+          ? "TM-D710: connect the control head COM port, select PACKET mode, and enter KISS mode first (KISS ON, then RESTART). Use 9600 baud, no flow control. See the user guide; disconnecting does not exit KISS."
+          : model.value === "nucleotnc"
+            ? "NucleoTNC uses serial KISS at 38400 baud, 8N1, with no flow control. On Linux the ST-Link serial device is commonly /dev/ttyACM0."
+            : "Place the TNC in KISS mode before connecting. OpenBeacon sends no setup or mode commands.";
   }
   async function refreshSerialPorts(initial?: string) {
     const wanted =
@@ -2311,6 +2313,9 @@ function startApp() {
     if (model.value === "ts2000") {
       baud.value = "57600";
       flow.value = "hardware";
+    } else if (model.value === "d710kiss") {
+      baud.value = "9600";
+      flow.value = "none";
     } else if (model.value === "nucleotnc") {
       baud.value = "38400";
       flow.value = "none";

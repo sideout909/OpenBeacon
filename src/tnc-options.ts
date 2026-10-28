@@ -4,6 +4,7 @@ export const serialModels = {
   serial: [
     { value: "generic", label: "Generic KISS TNC" },
     { value: "nucleotnc", label: "Mobilinkd NucleoTNC" },
+    { value: "d710kiss", label: "Kenwood TM-D710 (KISS receive and transmit)" },
   ],
   kenwood: [
     {
