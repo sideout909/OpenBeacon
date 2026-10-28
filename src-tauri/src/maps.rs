@@ -79,6 +79,7 @@ fn read_extract_progress(
     let mut discard = false;
     let mut last = None;
     let mut error_line = None;
+    let mut last_message = None;
     let mut bytes = [0u8; 4096];
     loop {
         let n = reader.read(&mut bytes)?;
@@ -96,8 +97,12 @@ fn read_extract_progress(
                                 update(percent);
                                 last = Some(percent);
                             }
-                        } else if text.to_ascii_lowercase().contains("failed to extract") {
-                            error_line = Some(text.trim().chars().take(700).collect());
+                        } else if !text.trim().is_empty() {
+                            let message: String = text.trim().chars().take(700).collect();
+                            if text.to_ascii_lowercase().contains("failed to extract") {
+                                error_line = Some(message.clone());
+                            }
+                            last_message = Some(message);
                         }
                     }
                 }
@@ -110,7 +115,17 @@ fn read_extract_progress(
             }
         }
     }
-    Ok(error_line)
+    if !discard && !frame.is_empty() {
+        let message = String::from_utf8_lossy(&frame).trim().to_owned();
+        if !message.is_empty() && extract_progress(&message).is_none() {
+            if message.to_ascii_lowercase().contains("failed to extract") {
+                error_line = Some(message.chars().take(700).collect());
+            } else {
+                last_message = Some(message.chars().take(700).collect());
+            }
+        }
+    }
+    Ok(error_line.or(last_message))
 }
 
 fn read_error_tail(mut reader: impl Read) -> std::io::Result<String> {
@@ -139,7 +154,7 @@ fn download_failure(status: impl std::fmt::Display, stderr: &str) -> String {
             "Map download failed ({status}): {}",
             line.chars().take(700).collect::<String>()
         ),
-        None => format!("Map download failed ({status}). Check your connection and try again."),
+        None => format!("Map download failed ({status}). The downloader did not report a reason. Check available disk space and try a smaller area."),
     }
 }
 
@@ -197,7 +212,14 @@ mod tests {
         let error = read_error_tail(&input[..]).unwrap();
         assert!(error.len() <= 8192);
         assert!(download_failure("exit 1", &error).contains("server returned HTTP 503"));
-        assert!(download_failure("exit 1", "").contains("Check your connection"));
+        assert!(download_failure("exit 1", "").contains("did not report a reason"));
+    }
+
+    #[test]
+    fn extractor_keeps_final_unterminated_diagnostic() {
+        let output = b"fetching chunks 50% |\rstorage error without newline";
+        let error = read_extract_progress(&output[..], |_| {}).unwrap().unwrap();
+        assert!(error.contains("storage error"));
     }
 
     #[test]
