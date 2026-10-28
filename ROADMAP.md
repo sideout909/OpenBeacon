@@ -188,6 +188,7 @@ See [KISS and Kenwood TNC research](KISS_TNC_RESEARCH.md) for protocol, model-sp
 
 ## Milestone 8 — First-release hardening
 
+- [ ] Next release: add a first-run setup wizard for clean installations. Guide users through station identity and location or GPS, map choices (including the bundled offline overview), and optional APRS-IS and radio connections. Keep transmit and automatic beaconing opt-in, allow skipping and changing choices later, and avoid re-running the wizard for existing users. Test clean installation, restart, incomplete setup, and upgrades on Windows and Linux.
 - [ ] Exercise the full workflow on Linux, Windows, and macOS: installation, first launch offline, map pack import/download, APRS-IS receive, radio receive, GPS, and controlled transmit where test hardware exists. Test aprs.fi lookup if included; it does not block the release on its own.
 - [ ] Document per-platform WebView, serial permissions, TNC setup, hardware coverage, and known gaps. Add CI builds and automated protocol/integration tests using representative fixtures and simulated services.
 - [ ] Meet the agreed startup, interaction, packet-burst, memory, and retention targets on reference hardware. Investigate regressions before adding features.
