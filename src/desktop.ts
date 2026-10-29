@@ -74,8 +74,28 @@ export const desktop = {
     ),
   listCaptureDevices: () =>
     invoke<{ id: string; name: string }[]>("list_capture_devices"),
-  startDirewolf: (audioDevice: string) =>
-    invoke<void>("start_direwolf", { audioDevice }),
+  listPlaybackDevices: () =>
+    invoke<{ id: string; name: string }[]>("list_playback_devices"),
+  startDirewolf: (
+    audioDevice: string,
+    outputDevice: string,
+    ptt: string,
+    pttDevice: string,
+    pttLine: string,
+    pttInvert: boolean,
+    gpio: number,
+  ) =>
+    invoke<void>("start_direwolf", {
+      settings: {
+        audioDevice,
+        outputDevice,
+        ptt,
+        pttDevice,
+        pttLine,
+        pttInvert,
+        gpio,
+      },
+    }),
   stopDirewolf: () => invoke<void>("stop_direwolf"),
   connectTnc: (endpoint: string, managed: boolean) =>
     invoke<number>("connect_tnc", { endpoint, managed }),
@@ -84,6 +104,20 @@ export const desktop = {
   listSerialDevices: () =>
     invoke<{ id: string; name: string }[]>("list_serial_devices"),
   disconnectTnc: () => invoke<void>("disconnect_tnc"),
+  startIgate: (callsign: string) => invoke<number>("start_igate", { callsign }),
+  stopIgate: () => invoke<void>("stop_igate"),
+  onIgateStatus: (
+    handler: (status: {
+      generation: number;
+      state: string;
+      message: string;
+      forwarded: number;
+      skipped: number;
+    }) => void,
+  ) =>
+    listen("igate-status", (event) =>
+      handler(event.payload as Parameters<typeof handler>[0]),
+    ),
   onTncStatus: (
     handler: (status: {
       generation: number;

@@ -1,0 +1,13 @@
+diff --git a/src/kissnet.c b/src/kissnet.c
+index 97094a0..ce82ecb 100644
+--- a/src/kissnet.c
++++ b/src/kissnet.c
+@@ -555,7 +555,7 @@ static THREAD_F connect_listen_thread (void *arg)
+ 
+         setsockopt (listen_sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&bcopt, 4);
+ 
+-    	sockaddr.sin_addr.s_addr = INADDR_ANY;
++    	sockaddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+ 	sockaddr.sin_port = htons(kps->tcp_port);
+     	sockaddr.sin_family = AF_INET;
+ 

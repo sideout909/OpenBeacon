@@ -5,6 +5,7 @@ export const serialModels = {
     { value: "generic", label: "Generic KISS TNC" },
     { value: "nucleotnc", label: "Mobilinkd NucleoTNC" },
     { value: "d710kiss", label: "Kenwood TM-D710 (KISS receive and transmit)" },
+    { value: "ts2000kiss", label: "Kenwood TS-2000 / TS-2000X (KISS)" },
   ],
   kenwood: [
     {
@@ -12,13 +13,15 @@ export const serialModels = {
       label: "Generic TNC2 / Kenwood monitor text (receive only)",
     },
     { value: "ts2000", label: "Kenwood TS-2000 / TS-2000X" },
-    { value: "d710", label: "Kenwood TM-D710 (monitor text, receive only)" },
   ],
 } as const;
 
 /** Do not silently switch an existing serial port to a different protocol at startup. */
 export function migrateTncSelection(kind: TncKind, model: string) {
-  if (kind === "serial" && ["ts2000", "d710", "d74"].includes(model)) {
+  if (model === "d710" && (kind === "serial" || kind === "kenwood")) {
+    return { kind: "serial" as TncKind, model: "d710kiss", needsReview: true };
+  }
+  if (kind === "serial" && ["ts2000", "d74"].includes(model)) {
     return {
       kind: "kenwood" as TncKind,
       model: model === "d74" ? "generic" : model,

@@ -715,6 +715,8 @@ function startApp() {
         : messagePath.value;
   }
   const autoAck = el<HTMLInputElement>("message-auto-ack");
+  // Automatic replies are a session-only choice, including after a webview restart.
+  autoAck.checked = false;
   const lastAck = new Map<string, number>();
   autoAck.onchange = () => {
     if (!autoAck.checked) lastAck.clear();
@@ -2268,6 +2270,12 @@ function startApp() {
     flow: string;
     endpoint: string;
     model: string;
+    soundPtt?: string;
+    soundOutput?: string;
+    soundPttDevice?: string;
+    soundPttLine?: string;
+    soundInvert?: boolean;
+    soundGpio?: number;
   };
   let previousTnc = (() => {
     try {
@@ -2366,14 +2374,14 @@ function startApp() {
       tncKind.value === "kenwood"
         ? model.value === "ts2000"
           ? "TS-2000 native packet mode: enable Menu 55 and the internal TNC. The rear COM port is shared with CAT. This setup was tested at 57600 baud with hardware flow control; verify your radio settings."
-          : model.value === "d710"
-            ? "TM-D710 native APRS monitor text is receive-only and has not been verified with this model. Enable PC APRS output/monitoring on the radio; OpenBeacon does not configure radio modes."
-            : "Receive-only TNC2-style monitor text. Enable compatible monitoring on the TNC; OpenBeacon does not configure its mode. Non-packet text appears in Traffic Monitor."
+          : "Receive-only TNC2-style monitor text. Enable compatible monitoring on the TNC; OpenBeacon does not configure its mode. Non-packet text appears in Traffic Monitor."
         : model.value === "d710kiss"
-          ? "TM-D710: connect the control head COM port, select PACKET mode, and enter KISS mode first (KISS ON, then RESTART). Use 9600 baud, no flow control. See the user guide; disconnecting does not exit KISS."
-          : model.value === "nucleotnc"
-            ? "NucleoTNC uses serial KISS at 38400 baud, 8N1, with no flow control. On Linux the ST-Link serial device is commonly /dev/ttyACM0."
-            : "Place the TNC in KISS mode before connecting. OpenBeacon sends no setup or mode commands.";
+          ? "TM-D710: connect the control head COM port and select PACKET mode. OpenBeacon attempts KISS setup on connection. Use 9600 baud, no flow control; disconnecting does not exit KISS."
+          : model.value === "ts2000kiss"
+            ? "TS-2000: enable the internal TNC and match the COM speed and flow control. OpenBeacon enables KISS when it finds the command prompt; if needed, it will ask you to power-cycle the radio."
+            : model.value === "nucleotnc"
+              ? "NucleoTNC uses serial KISS at 38400 baud, 8N1, with no flow control. On Linux the ST-Link serial device is commonly /dev/ttyACM0."
+              : "Place the TNC in KISS mode before connecting. OpenBeacon sends no setup or mode commands.";
   }
   async function refreshSerialPorts(initial?: string) {
     const wanted =
@@ -2408,7 +2416,7 @@ function startApp() {
   serialPort.onchange = updateTncKind;
   baud.onchange = updateTncKind;
   model.onchange = () => {
-    if (model.value === "ts2000") {
+    if (model.value === "ts2000" || model.value === "ts2000kiss") {
       baud.value = "57600";
       flow.value = "hardware";
     } else if (model.value === "d710kiss") {
@@ -2462,10 +2470,91 @@ function startApp() {
       updateDeviceChoice();
     }
   }
+  const soundPtt = el<HTMLSelectElement>("sound-ptt");
+  const soundOutput = el<HTMLSelectElement>("sound-output");
+  const soundOutputCustom = el<HTMLInputElement>("sound-output-custom");
+  const soundPort = el<HTMLSelectElement>("sound-ptt-port");
+  const soundPortCustom = el<HTMLInputElement>("sound-ptt-custom");
+  const soundLine = el<HTMLSelectElement>("sound-ptt-line");
+  const soundInvert = el<HTMLInputElement>("sound-invert");
+  const soundGpio = el<HTMLInputElement>("sound-gpio");
+  const soundHid = el<HTMLInputElement>("sound-hid");
+  soundPtt.value = previousTnc?.soundPtt || "off";
+  soundLine.value = previousTnc?.soundPttLine || "RTS";
+  soundInvert.checked = previousTnc?.soundInvert || false;
+  soundGpio.value = String(previousTnc?.soundGpio || 3);
+  if (previousTnc?.soundPtt === "cm108")
+    soundHid.value = previousTnc.soundPttDevice || "";
+  function updateSoundOptions() {
+    el("sound-serial-ptt").hidden = soundPtt.value !== "serial";
+    el("sound-cm108-ptt").hidden = soundPtt.value !== "cm108";
+    el("sound-invert-label").hidden = !["serial", "cm108"].includes(
+      soundPtt.value,
+    );
+    el("sound-output-custom-label").hidden = soundOutput.value !== "custom";
+    el("sound-ptt-custom-label").hidden = soundPort.value !== "custom";
+  }
+  soundPtt.onchange =
+    soundOutput.onchange =
+    soundPort.onchange =
+      updateSoundOptions;
+  updateSoundOptions();
+  async function refreshSoundOutputs(initial?: string) {
+    const wanted =
+      initial ??
+      (soundOutput.value === "custom"
+        ? soundOutputCustom.value
+        : soundOutput.value);
+    try {
+      const devices = await desktop.listPlaybackDevices();
+      soundOutput.replaceChildren(
+        new Option("Choose an audio output", "default"),
+        ...devices.map((d) => new Option(d.name, d.id)),
+        new Option("Other / enter manually", "custom"),
+      );
+      if ([...soundOutput.options].some((o) => o.value === wanted))
+        soundOutput.value = wanted;
+      else if (wanted) {
+        soundOutput.value = "custom";
+        soundOutputCustom.value = wanted;
+      }
+      el("sound-output-status").textContent =
+        `${devices.length} audio outputs found.`;
+      updateSoundOptions();
+    } catch (error) {
+      el("sound-output-status").textContent = String(error);
+    }
+  }
+  async function refreshSoundPorts(initial?: string) {
+    const wanted =
+      initial ??
+      (soundPort.value === "custom" ? soundPortCustom.value : soundPort.value);
+    try {
+      const devices = await desktop.listSerialDevices();
+      soundPort.replaceChildren(
+        new Option("Select a PTT port", "custom"),
+        ...devices.map((d) => new Option(d.name, d.id)),
+      );
+      if ([...soundPort.options].some((o) => o.value === wanted))
+        soundPort.value = wanted;
+      else if (wanted) {
+        soundPort.value = "custom";
+        soundPortCustom.value = wanted;
+      }
+      updateSoundOptions();
+    } catch (error) {
+      el("sound-output-status").textContent =
+        `Could not list PTT ports: ${String(error)}`;
+    }
+  }
+  el("sound-refresh-output").onclick = () => void refreshSoundOutputs();
+  el("sound-refresh-ports").onclick = () => void refreshSoundPorts();
   tncDevice.onchange = updateDeviceChoice;
   el("refresh-tnc-devices").onclick = () => void refreshAudioDevices();
   el("tnc-button").onclick = () => {
     void refreshAudioDevices(rememberedDevice);
+    void refreshSoundOutputs(previousTnc?.soundOutput);
+    void refreshSoundPorts(previousTnc?.soundPttDevice);
     void refreshSerialPorts(previousTnc?.port);
     updateTncKind();
     tncDialog.showModal();
@@ -2482,7 +2571,15 @@ function startApp() {
       await listenersReady;
       if (!tncWanted || attempt !== tncAttempt) return;
       if (settings.kind === "direwolf") {
-        await desktop.startDirewolf(settings.device);
+        await desktop.startDirewolf(
+          settings.device,
+          settings.soundOutput || "default",
+          settings.soundPtt || "off",
+          settings.soundPttDevice || "",
+          settings.soundPttLine || "RTS",
+          settings.soundInvert || false,
+          settings.soundGpio || 3,
+        );
         if (!tncWanted || attempt !== tncAttempt) {
           await desktop.stopDirewolf();
           return;
@@ -2499,7 +2596,11 @@ function startApp() {
             ? settings.model === "ts2000"
               ? "ts2000"
               : "kenwood"
-            : "kiss",
+            : settings.model === "d710kiss"
+              ? "d710kiss"
+              : settings.model === "ts2000kiss"
+                ? "ts2000kiss"
+                : "kiss",
         );
       } else {
         tncGeneration = await desktop.connectTnc(settings.endpoint, false);
@@ -2538,6 +2639,20 @@ function startApp() {
       flow: flow.value,
       endpoint: endpoint.value.trim(),
       model: model.value,
+      soundPtt: soundPtt.value,
+      soundOutput:
+        soundOutput.value === "custom"
+          ? soundOutputCustom.value.trim()
+          : soundOutput.value,
+      soundPttDevice:
+        soundPtt.value === "cm108"
+          ? soundHid.value.trim()
+          : soundPort.value === "custom"
+            ? soundPortCustom.value.trim()
+            : soundPort.value,
+      soundPttLine: soundLine.value,
+      soundInvert: soundInvert.checked,
+      soundGpio: Number(soundGpio.value),
     });
   };
   el("tnc-disconnect").onclick = async () => {
@@ -3234,6 +3349,52 @@ function startApp() {
   el("close-settings").onclick = () => settingsDialog.close();
   let savedCallsign = localStorage.getItem("openbeacon-call") || "";
   el("header-callsign").textContent = savedCallsign || "Not configured";
+  let igateGeneration = 0;
+  let igateWanted = false;
+  const igateCall = el<HTMLInputElement>("igate-call");
+  const igateAuto = el<HTMLInputElement>("igate-autostart");
+  igateAuto.checked =
+    localStorage.getItem("openbeacon-igate-autostart") === "true";
+  igateAuto.onchange = () =>
+    localStorage.setItem(
+      "openbeacon-igate-autostart",
+      String(igateAuto.checked),
+    );
+  const igateSavedCall = localStorage.getItem("openbeacon-igate-call") || "";
+  igateCall.value = igateSavedCall || savedCallsign;
+  igateCall.onchange = () => {
+    const call = igateCall.value.trim().toUpperCase();
+    if (call && call !== savedCallsign.toUpperCase())
+      localStorage.setItem("openbeacon-igate-call", call);
+    else localStorage.removeItem("openbeacon-igate-call");
+  };
+  el("igate-start").onclick = async () => {
+    if (igateWanted) return;
+    igateWanted = true;
+    el<HTMLButtonElement>("igate-start").disabled = true;
+    el<HTMLButtonElement>("igate-stop").disabled = false;
+    el("igate-status").textContent = "Starting…";
+    try {
+      await listenersReady;
+      igateGeneration = await desktop.startIgate(
+        igateCall.value.trim() || savedCallsign,
+      );
+      if (!igateWanted) await desktop.stopIgate();
+    } catch (error) {
+      igateWanted = false;
+      el<HTMLButtonElement>("igate-start").disabled = false;
+      el<HTMLButtonElement>("igate-stop").disabled = true;
+      el("igate-status").textContent = String(error);
+    }
+  };
+  el("igate-stop").onclick = async () => {
+    igateWanted = false;
+    await desktop.stopIgate();
+    el<HTMLButtonElement>("igate-start").disabled = false;
+    el<HTMLButtonElement>("igate-stop").disabled = true;
+    el("igate-status").textContent = "Stopped";
+  };
+
   let savedSymbol = "/-";
   let savedComment = "";
   let savedRfPath = "WIDE2-2";
@@ -3482,6 +3643,11 @@ function startApp() {
         : "system";
     el<HTMLSelectElement>("theme-choice").value = theme;
     applyTheme();
+    if (
+      !igateCall.value.trim() ||
+      igateCall.value.trim().toUpperCase() === savedCallsign.toUpperCase()
+    )
+      igateCall.value = settings.callsign;
     savedCallsign = settings.callsign;
     el("header-callsign").textContent = savedCallsign || "Not configured";
     if (!el("messages-panel").hidden) renderMessages();
@@ -3672,22 +3838,33 @@ function startApp() {
           stopBeaconSchedule("Beaconing stopped: GPS connection failed.");
       }
     }),
+    desktop.onIgateStatus((payload) => {
+      if (!igateWanted || payload.generation < igateGeneration) return;
+      igateGeneration = payload.generation;
+      el("igate-status").textContent = payload.message;
+      el("igate-counts").textContent =
+        `${payload.forwarded} forwarded · ${payload.skipped} skipped`;
+    }),
     desktop.onTncStatus((payload) => {
       if (!tncWanted || payload.generation < tncGeneration) return;
       tncGeneration = payload.generation;
-      if (payload.state === "stopped") {
+      if (payload.state === "stopped" || payload.state === "power_cycle") {
         tncWanted = false;
         el<HTMLButtonElement>("tnc-connect").disabled = false;
       }
       el("tnc-status").textContent = payload.message;
+      if (payload.state === "power_cycle" && !tncDialog.open)
+        tncDialog.showModal();
       el("tnc-counts").textContent =
         `${payload.received} packets · ${payload.errors} invalid or unsupported frames`;
       el("tnc-header-status").textContent =
         payload.state === "connected"
           ? "Connected"
-          : payload.state === "error" || payload.state === "stopped"
-            ? "Error"
-            : "Connecting…";
+          : payload.state === "power_cycle"
+            ? "Power cycle needed"
+            : payload.state === "error" || payload.state === "stopped"
+              ? "Error"
+              : "Connecting…";
       el("tnc-dot").className =
         payload.state === "connected"
           ? "green"
@@ -3933,6 +4110,7 @@ function startApp() {
     }
   }
   void startSavedConnection().then(() => {
+    if (igateAuto.checked) el<HTMLButtonElement>("igate-start").click();
     if (
       autoTnc.checked &&
       (previousTnc || localStorage.getItem("openbeacon-tnc-audio"))
@@ -4097,6 +4275,7 @@ function startApp() {
       positionBeacon: beaconScheduleActive,
       weatherBeacon: weatherBeaconActive,
       transmitting:
+        igateWanted ||
         beaconSending ||
         messageTransmissions > 0 ||
         outbox.some((item) => item.state === "sending"),
@@ -4153,7 +4332,7 @@ function startApp() {
     }
     if (updateIsBlocked()) {
       updateStatus.textContent =
-        "Stop beaconing and finish or cancel active transmissions and map downloads before updating.";
+        "Stop the iGate and beaconing, and finish or cancel active transmissions and map downloads before updating.";
       return;
     }
     updateBusy = true;
@@ -4194,7 +4373,7 @@ function startApp() {
       }
       if (updateIsBlocked()) {
         updateStatus.textContent =
-          "Update downloaded. Stop beaconing and finish active operations, then select Install update.";
+          "Update downloaded. Stop the iGate and beaconing and finish active operations, then select Install update.";
         updateInstall.textContent = "Install update";
         return;
       }

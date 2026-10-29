@@ -7,10 +7,10 @@ use std::{
     io::{Read, Write},
     net::{SocketAddr, TcpStream},
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc, Arc, Mutex,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tauri::{Emitter, Manager, State};
 
@@ -76,7 +76,12 @@ fn tnc_command(stream: &mut (impl Read + Write), command: &str) -> Result<String
 }
 fn tnc_setting(response: &str, name: &str) -> Result<String, String> {
     for line in response.split(['\r', '\n']) {
-        let line = line.trim().trim_start_matches("cmd:").trim();
+        // Some Kenwood TNCs intersperse XON/XOFF flow-control bytes in replies,
+        // even when the host uses hardware flow control.
+        let line = line
+            .trim_matches(|c: char| c.is_whitespace() || c == '\x11' || c == '\x13')
+            .trim_start_matches("cmd:")
+            .trim_matches(|c: char| c.is_whitespace() || c == '\x11' || c == '\x13');
         let Some(rest) = line.strip_prefix(name) else {
             continue;
         };
@@ -287,13 +292,19 @@ pub fn connect_tnc(
                         "connected",
                         format!(
                             "{} KISS · {addr}",
-                            if managed { "Receive-only" } else { "Connected" }
+                            if managed && !app.state::<Modem>().1.load(Ordering::SeqCst) {
+                                "Receive-only"
+                            } else {
+                                "Connected"
+                            }
                         ),
                         received,
                         errors,
                     );
                     retry = 1;
-                    let tx = (!managed).then(|| register_tx(&transmitter, generation));
+                    let managed_transmit = managed && app.state::<Modem>().1.load(Ordering::SeqCst);
+                    let tx = (!managed || managed_transmit)
+                        .then(|| register_tx(&transmitter, generation));
                     let mut decoder = KissDecoder::default();
                     let mut buf = [0; 4096];
                     while active(&token, generation) {
@@ -316,6 +327,7 @@ pub fn connect_tnc(
                                 received += packets.len() as u64;
                                 errors += bad;
                                 if !packets.is_empty() && active(&token, generation) {
+                                    crate::igate::offer(&app, &packets);
                                     if let Err(error) = crate::history::save(&app, &packets) {
                                         let _ = app.emit("history-error", error);
                                     }
@@ -333,7 +345,12 @@ pub fn connect_tnc(
                                     "connected",
                                     format!(
                                         "{} KISS · {addr}",
-                                        if managed { "Receive-only" } else { "Connected" }
+                                        if managed && !app.state::<Modem>().1.load(Ordering::SeqCst)
+                                        {
+                                            "Receive-only"
+                                        } else {
+                                            "Connected"
+                                        }
                                     ),
                                     received,
                                     errors,
@@ -488,6 +505,121 @@ impl MonitorDecoder {
         (packets, errors)
     }
 }
+// A D710 in command mode responds to CR with cmd:. A TNC already in KISS
+// mode normally remains quiet; never send text commands without a prompt.
+fn d710_initialize(
+    stream: &mut (impl Read + Write),
+    active: impl Fn() -> bool,
+) -> Result<bool, String> {
+    fn prompt(
+        stream: &mut (impl Read + Write),
+        active: &impl Fn() -> bool,
+    ) -> Result<bool, String> {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut received = Vec::new();
+        while active() && Instant::now() < deadline {
+            let mut buf = [0; 256];
+            match stream.read(&mut buf) {
+                Ok(0) => std::thread::sleep(Duration::from_millis(10)),
+                Ok(n) => {
+                    received.extend_from_slice(&buf[..n]);
+                    if received.windows(4).any(|v| v.eq_ignore_ascii_case(b"cmd:")) {
+                        return Ok(true);
+                    }
+                    if received.len() > 4096 {
+                        return Err("Unexpected response while setting up D710.".into());
+                    }
+                }
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                    ) => {}
+                Err(e) => return Err(format!("D710 setup read failed: {e}")),
+            }
+        }
+        Ok(false)
+    }
+    stream
+        .write_all(b"\r")
+        .map_err(|e| format!("D710 setup failed: {e}"))?;
+    if !prompt(stream, &active)? {
+        return Ok(false);
+    }
+    if !active() {
+        return Err("D710 setup cancelled.".into());
+    }
+    stream
+        .write_all(b"KISS ON\r")
+        .map_err(|e| format!("D710 KISS setup failed: {e}"))?;
+    if !prompt(stream, &active)? {
+        return Err("D710 did not acknowledge KISS ON; RESTART was not sent.".into());
+    }
+    if !active() {
+        return Err("D710 setup cancelled.".into());
+    }
+    stream
+        .write_all(b"RESTART\r")
+        .map_err(|e| format!("D710 restart failed: {e}"))?;
+    stream
+        .flush()
+        .map_err(|e| format!("D710 restart failed: {e}"))?;
+    std::thread::sleep(Duration::from_millis(500));
+    Ok(true)
+}
+// Probe command mode without assuming silence means the radio is actually in KISS.
+// The radio must be power-cycled after KISS ON; a serial reopen is insufficient.
+fn ts2000_kiss_prepare(
+    stream: &mut (impl Read + Write),
+    active: impl Fn() -> bool,
+) -> Result<bool, String> {
+    stream
+        .write_all(b"\r")
+        .map_err(|e| format!("TS-2000 probe failed: {e}"))?;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut response = Vec::new();
+    while active() && Instant::now() < deadline {
+        let mut buf = [0; 256];
+        match stream.read(&mut buf) {
+            Ok(n) if n > 0 => {
+                response.extend_from_slice(&buf[..n]);
+                if response.windows(4).any(|v| v.eq_ignore_ascii_case(b"cmd:")) {
+                    break;
+                }
+                if response.len() > 4096 {
+                    return Err(
+                        "Unexpected TS-2000 response; check the selected port and mode.".into(),
+                    );
+                }
+            }
+            Ok(_) => std::thread::sleep(Duration::from_millis(10)),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) => {}
+            Err(e) => return Err(format!("TS-2000 probe failed: {e}")),
+        }
+    }
+    if !active() {
+        return Err("TS-2000 setup cancelled.".into());
+    }
+    if !response.windows(4).any(|v| v.eq_ignore_ascii_case(b"cmd:")) {
+        return Ok(false);
+    }
+    let current = tnc_setting(&tnc_command(stream, "KISS")?, "KISS")?;
+    if !current.eq_ignore_ascii_case("ON") && !current.eq_ignore_ascii_case("OFF") {
+        return Err("Could not determine TS-2000 KISS setting.".into());
+    }
+    if current.eq_ignore_ascii_case("OFF") {
+        tnc_command(stream, "KISS ON")?;
+        let confirmed = tnc_setting(&tnc_command(stream, "KISS")?, "KISS")?;
+        if !confirmed.eq_ignore_ascii_case("ON") {
+            return Err("TS-2000 did not confirm KISS ON; check radio settings.".into());
+        }
+    }
+    Ok(true)
+}
 #[tauri::command]
 pub fn connect_serial_tnc(
     app: tauri::AppHandle,
@@ -501,7 +633,10 @@ pub fn connect_serial_tnc(
         || port.len() > 512
         || !(300..=921600).contains(&baud)
         || !matches!(flow.as_str(), "none" | "hardware" | "software")
-        || !matches!(mode.as_str(), "kiss" | "kenwood" | "ts2000")
+        || !matches!(
+            mode.as_str(),
+            "kiss" | "d710kiss" | "ts2000kiss" | "kenwood" | "ts2000"
+        )
     {
         return Err("Choose a serial port, baud rate, and valid flow control.".into());
     }
@@ -536,6 +671,53 @@ pub fn connect_serial_tnc(
                     if !active(&token, generation) {
                         break;
                     }
+                    let mut ts2000_unconfirmed = false;
+                    if mode == "ts2000kiss" {
+                        report(
+                            &app,
+                            generation,
+                            "connecting",
+                            "Checking TS-2000 KISS mode…".into(),
+                            received,
+                            errors,
+                        );
+                        match ts2000_kiss_prepare(&mut stream, || active(&token, generation)) {
+                            Ok(true) => {
+                                report(&app, generation, "power_cycle", "KISS is enabled. Power the TS-2000 off and back on, then select Start receiver.".into(), received, errors);
+                                break;
+                            }
+                            Ok(false) => ts2000_unconfirmed = true,
+                            Err(e) => {
+                                report(&app, generation, "stopped", e, received, errors);
+                                break;
+                            }
+                        }
+                        if !active(&token, generation) {
+                            break;
+                        }
+                    }
+                    let mut d710_unconfirmed = false;
+                    if mode == "d710kiss" {
+                        report(
+                            &app,
+                            generation,
+                            "connecting",
+                            "Preparing D710 KISS mode…".into(),
+                            received,
+                            errors,
+                        );
+                        match d710_initialize(&mut stream, || active(&token, generation)) {
+                            Ok(true) => {}
+                            Ok(false) => d710_unconfirmed = true,
+                            Err(e) => {
+                                report(&app, generation, "stopped", e, received, errors);
+                                break;
+                            }
+                        }
+                        if !active(&token, generation) {
+                            break;
+                        }
+                    }
                     retry = 1;
                     report(
                         &app,
@@ -543,7 +725,11 @@ pub fn connect_serial_tnc(
                         "connected",
                         format!(
                             "Connected · {} · {port} · {baud} baud",
-                            if mode == "kiss" {
+                            if mode == "ts2000kiss" && ts2000_unconfirmed {
+                                "TS-2000 KISS (mode unconfirmed)"
+                            } else if mode == "d710kiss" && d710_unconfirmed {
+                                "D710 KISS (mode unconfirmed)"
+                            } else if mode == "kiss" || mode == "d710kiss" || mode == "ts2000kiss" {
                                 "serial KISS"
                             } else if mode == "ts2000" {
                                 "TS-2000 text mode"
@@ -554,7 +740,10 @@ pub fn connect_serial_tnc(
                         received,
                         errors,
                     );
-                    let tx = (mode == "kiss" || mode == "ts2000")
+                    let tx = (mode == "kiss"
+                        || mode == "d710kiss"
+                        || mode == "ts2000kiss"
+                        || mode == "ts2000")
                         .then(|| register_tx(&transmitter, generation));
                     let mut decoder = KissDecoder::default();
                     let mut monitor = MonitorDecoder::default();
@@ -569,7 +758,10 @@ pub fn connect_serial_tnc(
                         match stream.read(&mut buf) {
                             Ok(0) => {}
                             Ok(n) => {
-                                let (packets, bad) = if mode == "kiss" {
+                                let (packets, bad) = if mode == "kiss"
+                                    || mode == "d710kiss"
+                                    || mode == "ts2000kiss"
+                                {
                                     decode_kiss_bytes(
                                         &mut decoder,
                                         &buf[..n],
@@ -581,6 +773,7 @@ pub fn connect_serial_tnc(
                                 received += packets.len() as u64;
                                 errors += bad;
                                 if !packets.is_empty() && active(&token, generation) {
+                                    crate::igate::offer(&app, &packets);
                                     if let Err(error) = crate::history::save(&app, &packets) {
                                         let _ = app.emit("history-error", error);
                                     }
@@ -598,7 +791,10 @@ pub fn connect_serial_tnc(
                                     "connected",
                                     format!(
                                         "Connected · {} · {port} · {baud} baud",
-                                        if mode == "kiss" {
+                                        if mode == "kiss"
+                                            || mode == "d710kiss"
+                                            || mode == "ts2000kiss"
+                                        {
                                             "serial KISS"
                                         } else if mode == "ts2000" {
                                             "TS-2000 text mode"
@@ -726,7 +922,7 @@ pub(crate) async fn send_rf_payload(
     let generation = state.0.load(Ordering::SeqCst);
     {
         let guard = state.1.lock().map_err(|_| "TNC unavailable")?;
-        let (_, tx) = guard.as_ref().filter(|(g, _)| *g == generation).ok_or("Connect a serial or TCP KISS TNC, or select the TS-2000 model for Kenwood text mode. Bundled Dire Wolf remains receive-only.")?;
+        let (_, tx) = guard.as_ref().filter(|(g, _)| *g == generation).ok_or("Connect a serial or TCP KISS TNC, or select the TS-2000 model for Kenwood text mode. Enable soundcard transmission with a PTT method if using bundled Dire Wolf.")?;
         tx.send(TxRequest {
             kiss: bytes,
             call: callsign.clone(),
@@ -760,7 +956,7 @@ fn stop_owned(child: &mut Option<std::process::Child>) {
     }
 }
 #[derive(Default)]
-pub struct Modem(std::sync::Mutex<Option<std::process::Child>>);
+pub struct Modem(std::sync::Mutex<Option<std::process::Child>>, AtomicBool);
 impl Drop for Modem {
     fn drop(&mut self) {
         if let Ok(child) = self.0.get_mut() {
@@ -799,12 +995,32 @@ fn spawn_staged(command: &mut std::process::Command) -> std::io::Result<std::pro
     }
     unreachable!()
 }
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SoundcardSettings {
+    audio_device: String,
+    output_device: String,
+    ptt: String,
+    ptt_device: String,
+    ptt_line: String,
+    ptt_invert: bool,
+    gpio: u8,
+}
 #[tauri::command]
 pub fn start_direwolf(
     app: tauri::AppHandle,
     state: State<'_, Modem>,
-    audio_device: String,
+    settings: SoundcardSettings,
 ) -> Result<(), String> {
+    let SoundcardSettings {
+        audio_device,
+        output_device,
+        ptt,
+        ptt_device,
+        ptt_line,
+        ptt_invert,
+        gpio,
+    } = settings;
     let device = audio_device.trim();
     if device.is_empty()
         || device.len() > 100
@@ -813,6 +1029,49 @@ pub fn start_direwolf(
             .all(|b| b.is_ascii_alphanumeric() || b"_-,:.=".contains(&b))
     {
         return Err("Enter an ALSA device name such as default or plughw:1,0.".into());
+    }
+    let output = output_device.trim();
+    if output.is_empty()
+        || output.len() > 100
+        || !output
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_-,:.=".contains(&b))
+    {
+        return Err("Enter a valid ALSA output device.".into());
+    }
+    let ptt_device = ptt_device.trim();
+    if ptt_device.len() > 200
+        || !ptt_device
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_-/.:".contains(&b))
+    {
+        return Err("Enter a valid PTT device path.".into());
+    }
+    let directive = match ptt.as_str() {
+        "off" | "vox" => String::new(),
+        "serial" if !ptt_device.is_empty() && matches!(ptt_line.as_str(), "RTS" | "DTR") => {
+            format!(
+                "PTT {ptt_device} {}{ptt_line}\n",
+                if ptt_invert { "-" } else { "" }
+            )
+        }
+        "cm108" if (1..=8).contains(&gpio) => format!(
+            "PTT CM108 {}{gpio}{}\n",
+            if ptt_invert { "-" } else { "" },
+            if ptt_device.is_empty() {
+                String::new()
+            } else {
+                format!(" {ptt_device}")
+            }
+        ),
+        _ => return Err("Choose a valid PTT method, port and GPIO pin.".into()),
+    };
+    let transmit = ptt != "off";
+    if transmit && output == "default" {
+        return Err(
+            "Choose the radio interface's audio output explicitly before enabling transmission."
+                .into(),
+        );
     }
     let mut child = state.0.lock().map_err(|e| e.to_string())?;
     if let Some(process) = child.as_mut() {
@@ -828,7 +1087,7 @@ pub fn start_direwolf(
     let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let config = dir.join("direwolf-receive.conf");
-    std::fs::write(&config, format!("ADEVICE {device} null\nACHANNELS 1\nCHANNEL 0\nMYCALL N0CALL\nMODEM 1200\nFIX_BITS 1 APRS\nAGWPORT 0\nKISSPORT 8001\n")).map_err(|e| e.to_string())?;
+    std::fs::write(&config, format!("ADEVICE {device} {}\nACHANNELS 1\nCHANNEL 0\nMYCALL N0CALL\nMODEM 1200\nFIX_BITS 1 APRS\n{directive}AGWPORT 0\nKISSPORT 8001\n", if transmit { output } else { "null" })).map_err(|e| e.to_string())?;
     let log_path = dir.join("direwolf.log");
     let log = std::fs::File::create(&log_path).map_err(|e| e.to_string())?;
     let log_err = log.try_clone().map_err(|e| e.to_string())?;
@@ -882,6 +1141,7 @@ pub fn start_direwolf(
             ));
         }
         *child = Some(process);
+        state.1.store(transmit, Ordering::SeqCst);
         Ok(())
     }
 }
@@ -889,6 +1149,7 @@ pub fn start_direwolf(
 pub fn stop_direwolf(state: State<'_, Modem>) -> Result<(), String> {
     let mut child = state.0.lock().map_err(|e| e.to_string())?;
     stop_owned(&mut child);
+    state.1.store(false, Ordering::SeqCst);
     Ok(())
 }
 
@@ -897,9 +1158,9 @@ pub struct CaptureDevice {
     id: String,
     name: String,
 }
-fn parse_capture_devices(pcm: &str, cards: &str) -> Vec<CaptureDevice> {
+fn parse_audio_devices(pcm: &str, cards: &str, direction: &str) -> Vec<CaptureDevice> {
     let mut devices = Vec::new();
-    for line in pcm.lines().filter(|line| line.contains("capture ")) {
+    for line in pcm.lines().filter(|line| line.contains(direction)) {
         let Some((id, description)) = line.split_once(':') else {
             continue;
         };
@@ -948,7 +1209,20 @@ pub fn list_capture_devices() -> Result<Vec<CaptureDevice>, String> {
         let pcm = std::fs::read_to_string("/proc/asound/pcm")
             .map_err(|e| format!("Could not list ALSA capture devices: {e}"))?;
         let cards = std::fs::read_to_string("/proc/asound/cards").unwrap_or_default();
-        Ok(parse_capture_devices(&pcm, &cards))
+        Ok(parse_audio_devices(&pcm, &cards, "capture "))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err("Audio device discovery is not available on this platform yet.".into())
+    }
+}
+#[tauri::command]
+pub fn list_playback_devices() -> Result<Vec<CaptureDevice>, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let pcm = std::fs::read_to_string("/proc/asound/pcm").map_err(|e| e.to_string())?;
+        let cards = std::fs::read_to_string("/proc/asound/cards").unwrap_or_default();
+        Ok(parse_audio_devices(&pcm, &cards, "playback "))
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -1028,6 +1302,123 @@ mod capture_tests {
         assert_eq!(sim.call, "K8OTY");
         assert_eq!(sim.path, "APRS VIA WIDE1-1");
         assert!(!sim.converse);
+    }
+    #[test]
+    fn kenwood_setting_accepts_flow_control_bytes() {
+        assert_eq!(
+            tnc_setting("\x11\x11KISS     ON\r\ncmd:", "KISS").unwrap(),
+            "ON"
+        );
+        assert_eq!(
+            tnc_setting("\x11MYCALL   K8OTY-1\r\ncmd:", "MYCALL").unwrap(),
+            "K8OTY-1"
+        );
+    }
+    #[test]
+    fn ts2000_prepare_verifies_setting_before_requesting_power_cycle() {
+        use std::collections::VecDeque;
+        struct Radio {
+            responses: VecDeque<Vec<u8>>,
+            writes: Vec<Vec<u8>>,
+        }
+        impl Write for Radio {
+            fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+                self.writes.push(data.to_vec());
+                Ok(data.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl Read for Radio {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if let Some(data) = self.responses.pop_front() {
+                    buf[..data.len()].copy_from_slice(&data);
+                    Ok(data.len())
+                } else {
+                    Err(std::io::ErrorKind::TimedOut.into())
+                }
+            }
+        }
+        let mut radio = Radio {
+            responses: [
+                b"cmd:".to_vec(),
+                b"KISS OFF\r\ncmd:".to_vec(),
+                b"KISS was OFF\r\ncmd:".to_vec(),
+                b"KISS ON\r\ncmd:".to_vec(),
+            ]
+            .into(),
+            writes: vec![],
+        };
+        assert!(ts2000_kiss_prepare(&mut radio, || true).unwrap());
+        assert_eq!(
+            radio.writes,
+            [
+                b"\r".to_vec(),
+                b"KISS\r".to_vec(),
+                b"KISS ON\r".to_vec(),
+                b"KISS\r".to_vec()
+            ]
+        );
+        let mut radio = Radio {
+            responses: [b"cmd:".to_vec(), b"KISS ON\r\ncmd:".to_vec()].into(),
+            writes: vec![],
+        };
+        assert!(ts2000_kiss_prepare(&mut radio, || true).unwrap());
+        assert_eq!(radio.writes, [b"\r".to_vec(), b"KISS\r".to_vec()]);
+        let mut radio = Radio {
+            responses: [
+                b"cmd:".to_vec(),
+                b"KISS OFF\r\ncmd:".to_vec(),
+                b"cmd:".to_vec(),
+                b"KISS OFF\r\ncmd:".to_vec(),
+            ]
+            .into(),
+            writes: vec![],
+        };
+        assert!(ts2000_kiss_prepare(&mut radio, || true).is_err());
+    }
+    #[test]
+    fn d710_setup_requires_command_prompt_before_changing_mode() {
+        use std::collections::VecDeque;
+        struct Radio {
+            responses: VecDeque<Vec<u8>>,
+            writes: Vec<Vec<u8>>,
+        }
+        impl Write for Radio {
+            fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+                self.writes.push(data.to_vec());
+                Ok(data.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl Read for Radio {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if let Some(data) = self.responses.pop_front() {
+                    buf[..data.len()].copy_from_slice(&data);
+                    Ok(data.len())
+                } else {
+                    Err(std::io::ErrorKind::TimedOut.into())
+                }
+            }
+        }
+        let mut radio = Radio {
+            responses: [b"cmd:".to_vec(), b"KISS ON\rcmd:".to_vec()].into(),
+            writes: vec![],
+        };
+        assert!(d710_initialize(&mut radio, || true).unwrap());
+        assert_eq!(
+            radio.writes,
+            [b"\r".to_vec(), b"KISS ON\r".to_vec(), b"RESTART\r".to_vec()]
+        );
+        let mut radio = Radio {
+            responses: [b"cmd:".to_vec()].into(),
+            writes: vec![],
+        };
+        assert!(d710_initialize(&mut radio, || true).is_err());
+        assert_eq!(radio.writes, [b"\r".to_vec(), b"KISS ON\r".to_vec()]);
     }
     #[test]
     fn rf_beacon_frame_has_requested_addresses_and_payload() {
@@ -1133,7 +1524,7 @@ mod capture_tests {
     }
     #[test]
     fn capture_listing_excludes_playback_and_uses_stable_card_id() {
-        let devices = parse_capture_devices("00-03: HDMI : HDMI : playback 1\n01-00: USB Audio : USB Audio : playback 1 : capture 1\n", " 1 [Device         ]: USB-Audio - USB PnP Sound Device\n");
+        let devices = parse_audio_devices("00-03: HDMI : HDMI : playback 1\n01-00: USB Audio : USB Audio : playback 1 : capture 1\n", " 1 [Device         ]: USB-Audio - USB PnP Sound Device\n", "capture ");
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].id, "plughw:CARD=Device,DEV=0");
         assert_eq!(devices[0].name, "USB PnP Sound Device — USB Audio");

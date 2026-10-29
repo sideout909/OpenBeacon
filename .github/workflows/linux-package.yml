@@ -15,7 +15,7 @@ jobs:
           node-version: '24'
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
-      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev cmake
+      - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libudev-dev cmake
       - run: npm ci
       - run: scripts/build-direwolf-linux.sh
       - run: npm run check

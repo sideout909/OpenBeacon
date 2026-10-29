@@ -3,6 +3,7 @@
 mod beacon;
 mod gps;
 mod history;
+mod igate;
 mod maps;
 mod messaging;
 mod tnc;
@@ -348,6 +349,7 @@ fn main() {
             app.manage(gps::Gps::default());
             app.manage(weather::WeatherState::default());
             app.manage(tnc::Tnc::default());
+            app.manage(igate::Igate::default());
             app.manage(maps::MapDownload::default());
             app.manage(maps::LocalMap::default());
             app.manage(tnc::Modem::default());
@@ -368,10 +370,13 @@ fn main() {
             maps::read_downloaded_map,
             maps::download_region_map,
             maps::cancel_map_download,
+            igate::start_igate,
+            igate::stop_igate,
             tnc::connect_tnc,
             tnc::connect_serial_tnc,
             tnc::list_serial_devices,
             tnc::list_capture_devices,
+            tnc::list_playback_devices,
             tnc::start_direwolf,
             tnc::stop_direwolf,
             tnc::disconnect_tnc,
@@ -395,6 +400,7 @@ fn main() {
         .expect("failed to build OpenBeacon")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                igate::shutdown(app);
                 tnc::shutdown(app);
                 gps::shutdown(app);
             }
