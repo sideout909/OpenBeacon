@@ -4054,7 +4054,7 @@ function startApp() {
           },
           // The signed AppImage includes an offline map and can take longer than
           // five minutes to download on a slow connection.
-          { timeout: 1800000 },
+          { timeout: 7200000 },
         );
         downloadedUpdate = true;
       }
