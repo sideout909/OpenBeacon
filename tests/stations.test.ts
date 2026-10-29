@@ -76,3 +76,26 @@ test("RF-only map keeps RF positions and tracks separate from APRS-IS", () => {
   assert.equal(store.active(true).stations.size, 0);
   assert.equal(store.active(false).stations.size, 0);
 });
+
+test("direct RF view excludes repeated and internet observations without losing earlier direct positions", () => {
+  const store = new MapStationStores();
+  const direct = packet("one", 1);
+  direct.path = ["WIDE1-1", "WIDE2-1"];
+  const repeated = packet("one", 2);
+  repeated.path = ["DIGI-1*", "WIDE2-1"];
+  repeated.position!.latitude = 43;
+  const internet = packet("two", 3);
+  internet.origin = "aprs-is";
+  internet.path = [];
+  const repeatedOnly = packet("three", 4);
+  repeatedOnly.path = ["WIDE2-1*"];
+  for (const item of [direct, repeated, internet, repeatedOnly])
+    store.observe(item);
+  assert.deepEqual([...store.active(true, true).stations.keys()], ["ONE"]);
+  assert.equal(store.active(true, true).stations.get("ONE")?.latitude, 42);
+  assert.equal(store.active(true, true).tracks.get("ONE")?.length, 1);
+  assert.equal(store.active(true).stations.get("ONE")?.latitude, 43);
+  assert.equal(store.active(false).stations.has("TWO"), true);
+  store.clear();
+  assert.equal(store.active(true, true).stations.size, 0);
+});

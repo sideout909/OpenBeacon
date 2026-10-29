@@ -4,18 +4,23 @@ import type { DecodedPacket, Station } from "./aprs";
 export class MapStationStores {
   readonly all = new StationStore();
   readonly rf = new StationStore();
+  readonly direct = new StationStore();
   observe(packet: DecodedPacket) {
     this.all.observe(packet);
-    if (packet.origin === "rf") this.rf.observe(packet);
+    if (packet.origin === "rf") {
+      this.rf.observe(packet);
+      if (packet.path.every((hop) => !hop.endsWith("*")))
+        this.direct.observe(packet);
+    }
   }
   clear() {
-    for (const store of [this.all, this.rf]) {
+    for (const store of [this.all, this.rf, this.direct]) {
       store.stations.clear();
       store.tracks.clear();
     }
   }
-  active(rfOnly: boolean) {
-    return rfOnly ? this.rf : this.all;
+  active(rfOnly: boolean, directOnly = false) {
+    return directOnly ? this.direct : rfOnly ? this.rf : this.all;
   }
 }
 

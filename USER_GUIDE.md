@@ -10,7 +10,7 @@ On a clean installation, the setup wizard introduces station identity, location 
 
 A basic world overview through zoom level 6 is included for offline use. Download a regional map for street-level detail, or use an online map; both require an internet connection. In **Settings → Configure maps**, choose an area and detail level, then download it. Higher zoom levels and larger areas need more storage and can take a long time. If a large download fails, try again or select a smaller region; a retry starts over. Only one downloaded region is retained. You can instead configure online maps using your own Protomaps API key, or open a compatible local PMTiles pack in the map configurator. Windows map downloading requires the included Windows map helper; one successful Windows 11 download has been reported.
 
-Use **RF only** beneath **Clear map** to show station positions and tracks heard over RF. Press it again to show all sources. This changes the map display; it does not disconnect APRS-IS or remove stored packets.
+Use the dropdown beneath **Clear map** to show all sources, RF only, or direct RF. Direct RF includes RF packets whose paths do not mark a digipeater as having repeated them; unused paths such as `WIDE1-1` do not exclude a station. This depends on the received path being accurate and is not proof of a direct radio link. The choice changes the map display; it does not disconnect APRS-IS or remove stored packets.
 
 ## Software updates
 

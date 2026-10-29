@@ -189,22 +189,28 @@ function startApp() {
   });
   const stationStore = new StationStore();
   const mapStationStores = new MapStationStores();
-  let mapRfOnly = localStorage.getItem("openbeacon-map-rf-only") === "true";
-  const mapRfButton = el<HTMLButtonElement>("map-rf-only");
-  function updateMapRfButton() {
-    mapRfButton.setAttribute("aria-pressed", String(mapRfOnly));
-    mapRfButton.classList.toggle("active", mapRfOnly);
-  }
-  updateMapRfButton();
-  mapRfButton.onclick = () => {
-    mapRfOnly = !mapRfOnly;
-    localStorage.setItem("openbeacon-map-rf-only", String(mapRfOnly));
-    updateMapRfButton();
+  type MapSourceMode = "all" | "rf" | "direct";
+  const storedMapMode = localStorage.getItem("openbeacon-map-source");
+  let mapSourceMode: MapSourceMode =
+    storedMapMode === "rf" || storedMapMode === "direct"
+      ? storedMapMode
+      : localStorage.getItem("openbeacon-map-rf-only") === "true" &&
+          !storedMapMode
+        ? "rf"
+        : "all";
+  const mapSourceChoice = el<HTMLSelectElement>("map-source");
+  mapSourceChoice.value = mapSourceMode;
+  const activeMapStore = () =>
+    mapStationStores.active(
+      mapSourceMode !== "all",
+      mapSourceMode === "direct",
+    );
+  mapSourceChoice.onchange = () => {
+    const choice = mapSourceChoice.value;
+    mapSourceMode = choice === "rf" || choice === "direct" ? choice : "all";
+    localStorage.setItem("openbeacon-map-source", mapSourceMode);
     dirty = true;
-    if (
-      selected &&
-      !mapStationStores.active(mapRfOnly).stations.has(selected)
-    ) {
+    if (selected && !activeMapStore().stations.has(selected)) {
       selected = null;
       el("details").hidden = true;
     } else updateDetails();
@@ -261,10 +267,16 @@ function startApp() {
     dirty = true;
   };
   function highlightRfStation(packet: DecodedPacket) {
+    if (
+      mapSourceMode === "direct" &&
+      packet.path.some((hop) => hop.endsWith("*"))
+    )
+      return;
     const call = packet.source.toUpperCase();
-    const station = mapRfOnly
-      ? mapStationStores.rf.stations.get(call)
-      : stations.get(call);
+    const station =
+      mapSourceMode !== "all"
+        ? activeMapStore().stations.get(call)
+        : stations.get(call);
     if (!station || !visibleStation(station.heardAt)) return;
     const old = rfHighlights.get(call);
     if (old) {
@@ -389,7 +401,7 @@ function startApp() {
   function stationData(): GeoJSON.FeatureCollection<GeoJSON.Point> {
     return {
       type: "FeatureCollection",
-      features: [...mapStationStores.active(mapRfOnly).stations.values()]
+      features: [...activeMapStore().stations.values()]
         .filter((s) => visibleStation(s.heardAt))
         .map((s) => {
           const icon = stationIcon(s.symbol);
@@ -411,27 +423,23 @@ function startApp() {
     return {
       type: "FeatureCollection",
       features: tracksOn.checked
-        ? [...mapStationStores.active(mapRfOnly).tracks.entries()].flatMap(
-            ([call, points]) => {
-              const station = mapStationStores
-                .active(mapRfOnly)
-                .stations.get(call);
-              return station &&
-                visibleStation(station.heardAt) &&
-                points.length >= 2
-                ? [
-                    {
-                      type: "Feature" as const,
-                      properties: { callsign: call },
-                      geometry: {
-                        type: "LineString" as const,
-                        coordinates: points,
-                      },
+        ? [...activeMapStore().tracks.entries()].flatMap(([call, points]) => {
+            const station = activeMapStore().stations.get(call);
+            return station &&
+              visibleStation(station.heardAt) &&
+              points.length >= 2
+              ? [
+                  {
+                    type: "Feature" as const,
+                    properties: { callsign: call },
+                    geometry: {
+                      type: "LineString" as const,
+                      coordinates: points,
                     },
-                  ]
-                : [];
-            },
-          )
+                  },
+                ]
+              : [];
+          })
         : [],
     };
   }
@@ -506,8 +514,9 @@ function startApp() {
   function updateDetails() {
     if (!selected) return;
     const s =
-      (mapRfOnly ? mapStationStores.rf.stations.get(selected) : undefined) ??
-      stations.get(selected);
+      (mapSourceMode !== "all"
+        ? activeMapStore().stations.get(selected)
+        : undefined) ?? stations.get(selected);
     if (!s) return;
     el("station-name").textContent = s.callsign;
     const icon = el("station-detail-icon");

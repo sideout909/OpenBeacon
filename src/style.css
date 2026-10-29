@@ -60,4 +60,4 @@ dialog .map-checkbox{display:flex;gap:8px;align-items:center}dialog .map-checkbo
 #update-notice[hidden],#install-update[hidden],#update-progress[hidden]{display:none}#update-progress{width:100%;margin-top:12px;accent-color:var(--accent)}
 #map-settings-dialog{max-height:calc(100dvh - 32px);overflow-y:auto;overscroll-behavior:contain}
 #setup-wizard{max-height:calc(100dvh - 32px);overflow-y:auto}.setup-actions{display:flex;flex-wrap:wrap;gap:8px}
-.map-rf-only-button{position:absolute;right:60px;top:54px;z-index:2}.map-rf-only-button.active{background:var(--accent);color:var(--surface);border-color:var(--accent)}
+.map-source-select{position:absolute;right:60px;top:54px;z-index:2;max-width:160px}
