@@ -1,4 +1,5 @@
 import { check as checkUpdate, type Update } from "@tauri-apps/plugin-updater";
+import { getVersion } from "@tauri-apps/api/app";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { updateBlocked, updateDownloadDetails } from "./update-control";
 import { shouldStartSetup } from "./setup-wizard";
@@ -32,6 +33,7 @@ import { addBasemap, removeBasemap, updateMapColors } from "./basemap";
 import { appShell } from "./shell";
 import * as maplibre from "maplibre-gl";
 import mapWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
+import appIcon from "../src-tauri/icons/128x128@2x.png";
 import { Protocol, PMTiles } from "pmtiles";
 import {
   desktop,
@@ -52,6 +54,16 @@ function startApp() {
   document.querySelector<HTMLDivElement>("#app")!.innerHTML = appShell;
   const el = <T extends HTMLElement = HTMLElement>(id: string): T =>
     document.getElementById(id) as T;
+  el<HTMLImageElement>("brand-icon").src = appIcon;
+  void getVersion()
+    .then((version) => {
+      el("app-version").textContent = `v${version}`;
+    })
+    .catch(() => {
+      el("app-version").textContent = "";
+    });
+  el("header-station").onclick = () =>
+    el<HTMLButtonElement>("station-button").click();
   document.querySelectorAll<HTMLDialogElement>("dialog").forEach((dialog) => {
     dialog.addEventListener("click", (event) => {
       if (event.target !== dialog) return;
@@ -3103,6 +3115,7 @@ function startApp() {
   el("station-button").onclick = () => settingsDialog.showModal();
   el("close-settings").onclick = () => settingsDialog.close();
   let savedCallsign = localStorage.getItem("openbeacon-call") || "";
+  el("header-callsign").textContent = savedCallsign || "Not configured";
   let savedSymbol = "/-";
   let savedComment = "";
   let savedRfPath = "WIDE2-2";
@@ -3352,6 +3365,7 @@ function startApp() {
     el<HTMLSelectElement>("theme-choice").value = theme;
     applyTheme();
     savedCallsign = settings.callsign;
+    el("header-callsign").textContent = savedCallsign || "Not configured";
     if (!el("messages-panel").hidden) renderMessages();
     savedSymbol = settings.symbol || "/-";
     savedComment = settings.beacon_comment ?? "";
