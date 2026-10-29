@@ -6,6 +6,8 @@ OpenBeacon is an offline-first, cross-platform APRS workstation with a responsiv
 
 **Reference environment:** Linux first; build and verify on Windows and macOS as the application matures. The primary radio test setup is a Kenwood TS-2000X with a soundcard TNC and an internal TNC. The owner has additional TNCs for compatibility testing. Actual hardware connections, supported TNC modes, and configuration will be verified on the equipment rather than assumed.
 
+An operator has reported installing and running OpenBeacon on a DigiPi; the particular hardware, build, and features exercised have not yet been independently verified.
+
 **Starting stack:** Tauri 2 and Rust for desktop services and protocol work; TypeScript and MapLibre GL JS for the interface and map. SQLite will hold application state and local history. The current app is an early working foundation, not the final app architecture. APRS-IS now uses a shared Rust packet core for APRS interpretation; connect future RF sources to the same core.
 
 ### Decisions already made

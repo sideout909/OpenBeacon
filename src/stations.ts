@@ -1,5 +1,24 @@
 import type { DecodedPacket, Station } from "./aprs";
 
+/** Keep RF positions and tracks separate from internet observations of the same station. */
+export class MapStationStores {
+  readonly all = new StationStore();
+  readonly rf = new StationStore();
+  observe(packet: DecodedPacket) {
+    this.all.observe(packet);
+    if (packet.origin === "rf") this.rf.observe(packet);
+  }
+  clear() {
+    for (const store of [this.all, this.rf]) {
+      store.stations.clear();
+      store.tracks.clear();
+    }
+  }
+  active(rfOnly: boolean) {
+    return rfOnly ? this.rf : this.all;
+  }
+}
+
 /** Bounded, insertion-ordered snapshot of the latest position for each station. */
 export class StationStore {
   readonly stations = new Map<string, Station>();

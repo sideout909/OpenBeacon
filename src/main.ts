@@ -39,7 +39,7 @@ import {
   type Theme,
   type WeatherObservation,
 } from "./desktop";
-import { StationStore } from "./stations";
+import { MapStationStores, StationStore } from "./stations";
 import { MessageInbox } from "./messages";
 import { showPacket } from "./packet-view";
 import { type DecodedPacket, sourceLabel } from "./aprs";
@@ -188,7 +188,27 @@ function startApp() {
     el("map-message").hidden = false;
   });
   const stationStore = new StationStore();
-  const mapStationStore = new StationStore();
+  const mapStationStores = new MapStationStores();
+  let mapRfOnly = localStorage.getItem("openbeacon-map-rf-only") === "true";
+  const mapRfButton = el<HTMLButtonElement>("map-rf-only");
+  function updateMapRfButton() {
+    mapRfButton.setAttribute("aria-pressed", String(mapRfOnly));
+    mapRfButton.classList.toggle("active", mapRfOnly);
+  }
+  updateMapRfButton();
+  mapRfButton.onclick = () => {
+    mapRfOnly = !mapRfOnly;
+    localStorage.setItem("openbeacon-map-rf-only", String(mapRfOnly));
+    updateMapRfButton();
+    dirty = true;
+    if (
+      selected &&
+      !mapStationStores.active(mapRfOnly).stations.has(selected)
+    ) {
+      selected = null;
+      el("details").hidden = true;
+    } else updateDetails();
+  };
   let mapCleared = false;
   const stations = stationStore.stations;
   const tracksOn = el<HTMLInputElement>("show-tracks");
@@ -232,8 +252,7 @@ function startApp() {
   >();
   el("clear-map").onclick = () => {
     mapCleared = true;
-    mapStationStore.stations.clear();
-    mapStationStore.tracks.clear();
+    mapStationStores.clear();
     for (const { marker, timer } of rfHighlights.values()) {
       clearTimeout(timer);
       marker.remove();
@@ -243,7 +262,9 @@ function startApp() {
   };
   function highlightRfStation(packet: DecodedPacket) {
     const call = packet.source.toUpperCase();
-    const station = stations.get(call);
+    const station = mapRfOnly
+      ? mapStationStores.rf.stations.get(call)
+      : stations.get(call);
     if (!station || !visibleStation(station.heardAt)) return;
     const old = rfHighlights.get(call);
     if (old) {
@@ -368,7 +389,7 @@ function startApp() {
   function stationData(): GeoJSON.FeatureCollection<GeoJSON.Point> {
     return {
       type: "FeatureCollection",
-      features: [...mapStationStore.stations.values()]
+      features: [...mapStationStores.active(mapRfOnly).stations.values()]
         .filter((s) => visibleStation(s.heardAt))
         .map((s) => {
           const icon = stationIcon(s.symbol);
@@ -390,23 +411,27 @@ function startApp() {
     return {
       type: "FeatureCollection",
       features: tracksOn.checked
-        ? [...mapStationStore.tracks.entries()].flatMap(([call, points]) => {
-            const station = mapStationStore.stations.get(call);
-            return station &&
-              visibleStation(station.heardAt) &&
-              points.length >= 2
-              ? [
-                  {
-                    type: "Feature" as const,
-                    properties: { callsign: call },
-                    geometry: {
-                      type: "LineString" as const,
-                      coordinates: points,
+        ? [...mapStationStores.active(mapRfOnly).tracks.entries()].flatMap(
+            ([call, points]) => {
+              const station = mapStationStores
+                .active(mapRfOnly)
+                .stations.get(call);
+              return station &&
+                visibleStation(station.heardAt) &&
+                points.length >= 2
+                ? [
+                    {
+                      type: "Feature" as const,
+                      properties: { callsign: call },
+                      geometry: {
+                        type: "LineString" as const,
+                        coordinates: points,
+                      },
                     },
-                  },
-                ]
-              : [];
-          })
+                  ]
+                : [];
+            },
+          )
         : [],
     };
   }
@@ -480,7 +505,9 @@ function startApp() {
   }
   function updateDetails() {
     if (!selected) return;
-    const s = stations.get(selected);
+    const s =
+      (mapRfOnly ? mapStationStores.rf.stations.get(selected) : undefined) ??
+      stations.get(selected);
     if (!s) return;
     el("station-name").textContent = s.callsign;
     const icon = el("station-detail-icon");
@@ -3453,7 +3480,7 @@ function startApp() {
     }
     if (packet.position && packet.source) {
       const evicted = stationStore.observe(packet);
-      if (!restoringHistory || !mapCleared) mapStationStore.observe(packet);
+      if (!restoringHistory || !mapCleared) mapStationStores.observe(packet);
       if (selected === evicted) {
         selected = null;
         el("details").hidden = true;

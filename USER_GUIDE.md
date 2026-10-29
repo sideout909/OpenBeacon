@@ -10,6 +10,8 @@ On a clean installation, the setup wizard introduces station identity, location 
 
 A basic world overview through zoom level 6 is included for offline use. Download a regional map for street-level detail, or use an online map; both require an internet connection. In **Settings → Configure maps**, choose an area and detail level, then download it. Higher zoom levels and larger areas need more storage and can take a long time. If a large download fails, try again or select a smaller region; a retry starts over. Only one downloaded region is retained. You can instead configure online maps using your own Protomaps API key, or open a compatible local PMTiles pack in the map configurator. Windows map downloading requires the included Windows map helper; one successful Windows 11 download has been reported.
 
+Use **RF only** beneath **Clear map** to show station positions and tracks heard over RF. Press it again to show all sources. This changes the map display; it does not disconnect APRS-IS or remove stored packets.
+
 ## Software updates
 
 OpenBeacon checks GitHub for signed beta updates shortly after startup. When an update is available, open **Settings → Software updates** and choose **Download and install**. Stop automatic position and weather beaconing, and finish any active transmission or map download before installing. The app closes and restarts during installation. Your station settings, history, credentials and downloaded map are stored separately from the application files. Installation and recovery should still be checked on your computer.

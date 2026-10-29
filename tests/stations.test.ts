@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { StationStore } from "../src/stations.ts";
+import { MapStationStores, StationStore } from "../src/stations.ts";
 import type { DecodedPacket } from "../src/aprs.ts";
 
 function packet(source: string, time: number): DecodedPacket {
@@ -58,4 +58,21 @@ test("tracks keep distinct positions, stay bounded and follow station eviction",
   assert.equal(store.tracks.get("ONE")?.length, 100);
   store.observe(packet("two", 200));
   assert.equal(store.tracks.has("ONE"), false);
+});
+
+test("RF-only map keeps RF positions and tracks separate from APRS-IS", () => {
+  const store = new MapStationStores();
+  const rf = packet("one", 1);
+  const internet = packet("one", 2);
+  internet.origin = "aprs-is";
+  internet.position!.latitude = 43;
+  store.observe(rf);
+  store.observe(internet);
+  assert.equal(store.active(true).stations.get("ONE")?.latitude, 42);
+  assert.equal(store.active(false).stations.get("ONE")?.latitude, 43);
+  assert.equal(store.active(true).tracks.get("ONE")?.length, 1);
+  assert.equal(store.active(false).tracks.get("ONE")?.length, 2);
+  store.clear();
+  assert.equal(store.active(true).stations.size, 0);
+  assert.equal(store.active(false).stations.size, 0);
 });
