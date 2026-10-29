@@ -4045,7 +4045,9 @@ function startApp() {
             if (event.event === "Finished")
               updateStatus.textContent = "Verifying update…";
           },
-          { timeout: 300000 },
+          // The signed AppImage includes an offline map and can take longer than
+          // five minutes to download on a slow connection.
+          { timeout: 1800000 },
         );
         downloadedUpdate = true;
       }
@@ -4061,7 +4063,7 @@ function startApp() {
       updateStatus.textContent = "Update installed. Restarting OpenBeacon…";
       await relaunch();
     } catch (error) {
-      updateStatus.textContent = `Update failed: ${String(error)}`;
+      updateStatus.textContent = `Update failed: ${String(error)}. Try downloading again, or install from the release page if the problem persists.`;
       updateProgress.hidden = true;
     } finally {
       updateApplying = false;
