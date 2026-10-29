@@ -1,6 +1,6 @@
 import { check as checkUpdate, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { updateBlocked } from "./update-control";
+import { updateBlocked, updateDownloadDetails } from "./update-control";
 import { shouldStartSetup } from "./setup-wizard";
 import {
   connectionLocation,
@@ -3957,6 +3957,7 @@ function startApp() {
   const updateCheck = el<HTMLButtonElement>("check-updates");
   const updateInstall = el<HTMLButtonElement>("install-update");
   const updateProgress = el<HTMLProgressElement>("update-progress");
+  const updateDetailsText = el("update-download-details");
   function updateIsBlocked() {
     return updateBlocked({
       positionBeacon: beaconScheduleActive,
@@ -3984,6 +3985,7 @@ function startApp() {
       availableUpdate = next;
       downloadedUpdate = false;
       updateProgress.hidden = true;
+      updateDetailsText.textContent = "";
       updateNotice.hidden = !next;
       updateInstall.hidden = !next;
       if (!next) updateStatus.textContent = "OpenBeacon is up to date.";
@@ -4027,6 +4029,7 @@ function startApp() {
       if (!downloadedUpdate) {
         updateProgress.hidden = false;
         updateProgress.removeAttribute("value");
+        updateDetailsText.textContent = "";
         let downloaded = 0,
           total = 0;
         updateStatus.textContent = "Downloading update…";
@@ -4036,6 +4039,10 @@ function startApp() {
               total = event.data.contentLength ?? 0;
             if (event.event === "Progress") {
               downloaded += event.data.chunkLength;
+              updateDetailsText.textContent = updateDownloadDetails(
+                downloaded,
+                total,
+              );
               if (total > 0)
                 updateProgress.value = Math.min(
                   100,
