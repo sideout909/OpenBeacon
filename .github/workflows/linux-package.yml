@@ -9,8 +9,8 @@ jobs:
   linux:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: npm
@@ -33,7 +33,7 @@ jobs:
           cp public/aprs-symbols/COPYRIGHT.md openbeacon-linux-x86_64/third-party/aprs-symbols/
           cp src/data/README.md src/data/aprs-deviceid.json openbeacon-linux-x86_64/third-party/aprs-deviceid/
           tar -czf openbeacon-linux-x86_64.tar.gz openbeacon-linux-x86_64
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: openbeacon-linux-x86_64
           path: openbeacon-linux-x86_64.tar.gz
