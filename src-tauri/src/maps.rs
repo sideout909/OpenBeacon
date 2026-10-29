@@ -200,15 +200,20 @@ fn read_error_tail(mut reader: impl Read) -> std::io::Result<String> {
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-fn download_failure(status: impl std::fmt::Display, stderr: &str) -> String {
-    let message = stderr.lines().map(str::trim).rfind(|line| !line.is_empty());
-    match message {
-        Some(line) => format!(
-            "Map download failed ({status}): {}",
-            line.chars().take(700).collect::<String>()
-        ),
-        None => format!("Map download failed ({status}). The downloader did not report a reason. Check available disk space and try a smaller area."),
-    }
+fn download_failure(status: impl std::fmt::Display, stdout: &str, stderr: &str) -> String {
+    let last_line = |text: &str| {
+        text.lines()
+            .map(str::trim)
+            .rfind(|line| !line.is_empty())
+            .map(|line| line.chars().take(700).collect::<String>())
+    };
+    let details = match (last_line(stdout), last_line(stderr)) {
+        (Some(out), Some(err)) if out != err => format!("Downloader: {out} · Error output: {err}"),
+        (Some(out), _) => out,
+        (None, Some(err)) => err,
+        (None, None) => "The downloader did not report a reason.".into(),
+    };
+    format!("Map download failed ({status}): {details} Large downloads can be retried or replaced with a smaller region; retries start over.")
 }
 
 #[cfg(test)]
@@ -255,7 +260,7 @@ mod tests {
     fn extractor_failure_reported_on_stdout_is_preserved() {
         let output = b"2026/10/28 main.go:185: Failed to extract, server returned HTTP 503\n";
         let error = read_extract_progress(&output[..], |_| {}).unwrap().unwrap();
-        assert!(download_failure("exit 1", &error).contains("server returned HTTP 503"));
+        assert!(download_failure("exit 1", &error, "").contains("server returned HTTP 503"));
     }
 
     #[test]
@@ -264,8 +269,10 @@ mod tests {
         input.extend_from_slice(b"\nError: server returned HTTP 503\n");
         let error = read_error_tail(&input[..]).unwrap();
         assert!(error.len() <= 8192);
-        assert!(download_failure("exit 1", &error).contains("server returned HTTP 503"));
-        assert!(download_failure("exit 1", "").contains("did not report a reason"));
+        assert!(download_failure("exit 1", "", &error).contains("server returned HTTP 503"));
+        assert!(download_failure("exit 1", "", "").contains("did not report a reason"));
+        let both = download_failure("exit 1", "Failed to extract: HTTP 503", "other error");
+        assert!(both.contains("HTTP 503") && both.contains("other error"));
     }
 
     #[test]
@@ -489,12 +496,7 @@ pub async fn download_region_map(
                             let stdout_error =
                                 progress_thread.join().ok().flatten().unwrap_or_default();
                             let stderr_error = error_thread.join().unwrap_or_default();
-                            let detail = if stderr_error.trim().is_empty() {
-                                &stdout_error
-                            } else {
-                                &stderr_error
-                            };
-                            return Err(download_failure(status, detail));
+                            return Err(download_failure(status, &stdout_error, &stderr_error));
                         }
                         None => std::thread::sleep(Duration::from_millis(300)),
                     }

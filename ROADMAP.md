@@ -188,7 +188,7 @@ See [KISS and Kenwood TNC research](KISS_TNC_RESEARCH.md) for protocol, model-sp
 
 ## Milestone 8 — First-release hardening
 
-- [ ] Next release: add a first-run setup wizard for clean installations. Guide users through station identity and location or GPS, map choices (including the bundled offline overview), and optional APRS-IS and radio connections. Keep transmit and automatic beaconing opt-in, allow skipping and changing choices later, and avoid re-running the wizard for existing users. Test clean installation, restart, incomplete setup, and upgrades on Windows and Linux.
+- [ ] Next release: a first pass of the clean-install setup wizard guides users through station identity, location or GPS, maps, and optional APRS-IS and radio connections. Steps can be skipped, unfinished setup resumes, existing settings avoid first-run prompts, and beaconing remains opt-in. Test the complete wizard, restart, incomplete setup, and upgrades on Windows and Linux before release.
 - [ ] Exercise the full workflow on Linux, Windows, and macOS: installation, first launch offline, map pack import/download, APRS-IS receive, radio receive, GPS, and controlled transmit where test hardware exists. Test aprs.fi lookup if included; it does not block the release on its own.
 - [ ] Document per-platform WebView, serial permissions, TNC setup, hardware coverage, and known gaps. Add CI builds and automated protocol/integration tests using representative fixtures and simulated services.
 - [ ] Meet the agreed startup, interaction, packet-burst, memory, and retention targets on reference hardware. Investigate regressions before adding features.
@@ -199,6 +199,17 @@ See [KISS and Kenwood TNC research](KISS_TNC_RESEARCH.md) for protocol, model-sp
 **Exit:** the defined first-release workflow is complete, tested, documented, and accepted on the supported platform matrix. A feature that lacks hardware or platform verification must be labeled accordingly.
 
 ## Milestone 9 — Broader APRS coverage
+
+### Ideas to explore
+
+- A local radio dashboard for nearby repeaters, frequencies, nets, events and explicitly opted-in, time-limited operator availability.
+- Event coordination on offline maps, with checkpoints, aid stations, teams, short status updates and clear expiry of stale information.
+- Infrastructure telemetry for repeater and digipeater sites, including battery voltage, backup power and temperature, with readable history and timestamps.
+- A coverage view based on packets and paths actually heard, without treating missing packets as proof of no coverage.
+- A local bulletin board for short, expiring community notices.
+- A weather view comparing nearby observations and highlighting changes and observation age.
+
+These are ideas for research and later design, not commitments that all are novel or implemented. Prefer existing APRS formats, compact and infrequent transmissions, public-data expectations, clear provenance and explicit operator control.
 
 - [ ] Decode and display additional telemetry values and metadata, objects/items and lifecycle, bulletins, announcements, queries/responses, and remaining position/weather variants.
 - [ ] Add creation/editing for supported objects/items, outgoing weather/telemetry, bulletins and relevant queries only after their corresponding receive/encode tests pass.

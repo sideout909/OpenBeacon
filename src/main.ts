@@ -1,6 +1,7 @@
 import { check as checkUpdate, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { updateBlocked } from "./update-control";
+import { shouldStartSetup } from "./setup-wizard";
 import {
   connectionLocation,
   currentPosition,
@@ -3568,6 +3569,142 @@ function startApp() {
       renderStations();
     }),
   ]);
+  const setupWizard = el<HTMLDialogElement>("setup-wizard");
+  let setupStep = 0;
+  const setupSteps = [
+    {
+      title: "Welcome to OpenBeacon",
+      description:
+        "Let's get your station ready. The bundled overview map works offline, and you can start with just the features you need.",
+      actions: [],
+    },
+    {
+      title: "Station identity",
+      description:
+        "Enter your callsign, SSID and optional APRS settings. You can use the app before entering a callsign.",
+      actions: [
+        {
+          label: "Set up station",
+          target: settingsDialog,
+          button: "station-button",
+        },
+      ],
+    },
+    {
+      title: "Location",
+      description:
+        "Use a GPS source or enter a fixed location. A location is needed for nearby stations and position beaconing.",
+      actions: [
+        {
+          label: "Set up location or GPS",
+          target: locationDialog,
+          button: "gps-button",
+        },
+      ],
+    },
+    {
+      title: "Maps",
+      description:
+        "The world overview is included. Download a region for detail, open a map file, or configure online maps.",
+      actions: [
+        {
+          label: "Configure maps",
+          target: mapConfigDialog,
+          button: "open-map-configurator",
+        },
+      ],
+    },
+    {
+      title: "Connections",
+      description:
+        "Optionally connect to APRS-IS or a radio TNC. Connecting does not start a beacon schedule.",
+      actions: [
+        { label: "Set up APRS-IS", target: dialog, button: "connection" },
+        { label: "Set up radio", target: tncDialog, button: "tnc-button" },
+      ],
+    },
+    {
+      title: "You're ready",
+      description:
+        "Explore the map and traffic monitor. You can reopen this wizard from Settings whenever you need it.",
+      actions: [],
+    },
+  ];
+  function renderSetup() {
+    localStorage.setItem("openbeacon-setup-step", String(setupStep));
+    const step = setupSteps[setupStep];
+    el("setup-progress").textContent =
+      `GETTING STARTED · ${setupStep + 1} OF ${setupSteps.length}`;
+    el("setup-title").textContent = step.title;
+    el("setup-description").textContent = step.description;
+    el<HTMLButtonElement>("setup-back").disabled = setupStep === 0;
+    el("setup-next").textContent =
+      setupStep === setupSteps.length - 1 ? "Finish" : "Next";
+    const actions = el("setup-actions");
+    actions.replaceChildren();
+    for (const action of step.actions) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "secondary";
+      button.textContent = action.label;
+      button.onclick = () => {
+        setupWizard.close();
+        action.target.addEventListener(
+          "close",
+          () => {
+            renderSetup();
+            if (!setupWizard.open) setupWizard.showModal();
+          },
+          { once: true },
+        );
+        el<HTMLButtonElement>(action.button).click();
+      };
+      actions.append(button);
+    }
+  }
+  function openSetup(resume = false) {
+    const savedStep = Number(localStorage.getItem("openbeacon-setup-step"));
+    setupStep =
+      resume &&
+      Number.isInteger(savedStep) &&
+      savedStep >= 0 &&
+      savedStep < setupSteps.length
+        ? savedStep
+        : 0;
+    localStorage.setItem("openbeacon-setup-started", "true");
+    localStorage.removeItem("openbeacon-setup-complete");
+    renderSetup();
+    if (!setupWizard.open) setupWizard.showModal();
+  }
+  function finishSetup() {
+    localStorage.setItem("openbeacon-setup-complete", "true");
+    localStorage.removeItem("openbeacon-setup-started");
+    localStorage.removeItem("openbeacon-setup-step");
+    setupWizard.close();
+  }
+  el("open-setup-wizard").onclick = () => {
+    mapSettingsDialog.close();
+    openSetup();
+  };
+  el("setup-close").onclick = finishSetup;
+  setupWizard.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    finishSetup();
+  });
+  el("setup-back").onclick = () => {
+    if (setupStep > 0) {
+      setupStep--;
+      renderSetup();
+    }
+  };
+  el("setup-next").onclick = () => {
+    if (setupStep === setupSteps.length - 1) finishSetup();
+    else {
+      setupStep++;
+      renderSetup();
+    }
+  };
+
   async function startSavedConnection() {
     try {
       await listenersReady;
@@ -3586,8 +3723,21 @@ function startApp() {
         await desktop.saveSettings(settings);
       }
       if (settings) applySettings(settings);
-      else if (!localStorage.getItem("openbeacon-map-setup"))
-        openMapConfigurator();
+      if (
+        shouldStartSetup(
+          localStorage.getItem("openbeacon-setup-complete") === "true",
+          Boolean(settings),
+          Boolean(
+            savedCallsign ||
+            configuredLocation ||
+            previousTnc ||
+            localStorage.getItem("openbeacon-map-setup") ||
+            localStorage.getItem("openbeacon-gps-settings"),
+          ),
+          localStorage.getItem("openbeacon-setup-started") === "true",
+        )
+      )
+        openSetup(true);
       try {
         const history = await desktop.loadHistory();
         for (const packet of history.reverse()) observePacket(packet, true);
