@@ -1,5 +1,15 @@
 import type { DecodedPacket, Station } from "./aprs";
 
+export type SourceFilter = "all" | "rf" | "direct";
+export function matchesSource(packet: DecodedPacket, mode: string): boolean {
+  if (mode === "all") return true;
+  if (packet.origin !== "rf") return false;
+  return (
+    mode === "rf" ||
+    (mode === "direct" && packet.path.every((hop) => !hop.endsWith("*")))
+  );
+}
+
 /** Keep RF positions and tracks separate from internet observations of the same station. */
 export class MapStationStores {
   readonly all = new StationStore();
@@ -9,8 +19,7 @@ export class MapStationStores {
     this.all.observe(packet);
     if (packet.origin === "rf") {
       this.rf.observe(packet);
-      if (packet.path.every((hop) => !hop.endsWith("*")))
-        this.direct.observe(packet);
+      if (matchesSource(packet, "direct")) this.direct.observe(packet);
     }
   }
   clear() {

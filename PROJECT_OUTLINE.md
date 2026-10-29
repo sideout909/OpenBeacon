@@ -1,5 +1,7 @@
 # OpenBeacon — Project Outline
 
+This is a longer-term design outline. Some first-release questions and planned milestones below predate implementation; see [README.md](README.md) and [ROADMAP.md](ROADMAP.md) for current status.
+
 ## 1. Product goal
 
 OpenBeacon is a lightweight desktop APRS workstation for Windows, macOS, and Linux. It combines an offline-first map, radio/TNC access, APRS-IS connectivity, GPS beaconing, weather, messaging, packet inspection, and station tools in one application.

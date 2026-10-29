@@ -14,7 +14,7 @@ Use the dropdown beneath **Clear map** to show all sources, RF only, or direct R
 
 ## Software updates
 
-OpenBeacon checks GitHub for signed beta updates shortly after startup. When an update is available, open **Settings → Software updates** and choose **Download and install**. Stop automatic position and weather beaconing, and finish any active transmission or map download before installing. The app closes and restarts during installation. Your station settings, history, credentials and downloaded map are stored separately from the application files. Installation and recovery should still be checked on your computer.
+OpenBeacon checks GitHub for signed updates shortly after startup. When an update is available, open **Settings → Software updates** and choose **Download and install**. Stop automatic position and weather beaconing, and finish any active transmission or map download before installing. The app closes and restarts during installation. Your station settings, history, credentials and downloaded map are stored separately from the application files. Installation and recovery should still be checked on your computer.
 
 The old portable beta does not include the updater; download and install an updater-enabled release once. The updater requires the Windows installer or Linux AppImage. A portable Linux executable can open the release page to download an AppImage instead. Checks require an internet connection and can be retried manually.
 
@@ -39,7 +39,7 @@ The map plots stations with valid positions. Select a station for its details, d
 
 ## Send position beacons
 
-In **Beacon → Beacon settings**, choose APRS-IS or a supported RF TNC. An APRS-IS passcode is required for APRS-IS transmission and is saved in My Station. Check the station identity, location, symbol, comment and RF path before sending. Use **Send once** or start the fixed-position schedule. Fixed mode uses the saved manual position if available; otherwise it captures the current GPS position when started and stops if the fix becomes stale. Use mobile mode for a moving station. The Beacon menu can start or stop an automatic schedule; its indicator is green when a schedule is active. Stopping a schedule cannot recall a packet already handed to a TNC.
+In **Beacon → Beacon settings**, choose APRS-IS or a supported RF TNC, then choose the **Fixed** or **GPS / Mobile** tab. An APRS-IS passcode is required for APRS-IS transmission and is saved in My Station. Check the station identity, location, symbol, comment and RF path before sending. In Fixed, **Set fixed location on map** saves a position selected by clicking the map. Use **Send once** or **Start auto** to begin the chosen schedule. Fixed mode uses the saved manual position if available; otherwise it captures the current GPS position when started and stops if the GPS fix becomes stale. Use GPS / Mobile mode for a moving station. The Beacon menu can start or stop an automatic schedule; its indicator is green when a schedule is active. **Stop all beacons** in the header stops both position and weather schedules. Stopping a schedule cannot recall a packet already handed to a TNC.
 
 For mobile SmartBeaconing, connect a GPS source in **GPS**, choose mobile mode in Beacon settings, review its speed, interval and turn settings, and start it. A fresh GPS fix with speed and course is required. The schedule stops if the fix becomes stale. The operator reports successful RF and APRS-IS beaconing over approximately two days (October 28, 2026). Mobile operation and additional hardware combinations need further real-hardware testing.
 
@@ -49,11 +49,11 @@ In **GPS**, select a serial port, NMEA TCP server, UDP listener, or gpsd service
 
 ## Messages
 
-Open **Messages** to read APRS messages addressed to your configured station. Choose APRS-IS or a supported RF TNC, enter the recipient and message, and send. RF messages have their own path selection. The outbox shows acknowledgements where available and offers manual resend; automatic retries are not implemented. Automatic acknowledgements are optional and can transmit over RF. The BBS inbox is a placeholder.
+Open **Messages** to read APRS messages addressed to your configured station. Select **New message**, choose APRS-IS or a supported RF TNC, enter the recipient and message, and send. RF messages have their own path selection. The outbox shows acknowledgements where available and offers manual resend; automatic retries are not implemented. Automatic acknowledgements are optional and can transmit over RF. Packet BBS access is not yet available.
 
 ## Weather
 
-Open **Weather** for the local NWS forecast and received weather stations. The forecast and personal weather sections can be collapsed. A forecast uses a current GPS fix or manual location and requires internet access within NWS coverage.
+Open **Weather** for the local NWS forecast and received weather stations. The forecast and personal weather sections can be collapsed, and their state is remembered. A forecast uses a current GPS fix or manual location and requires internet access within NWS coverage. The Stations, Weather and Traffic Monitor source controls offer all, RF, and direct RF views; direct RF relies on the TNC's reported digipeater-used markers.
 
 For your own station, configure a Weather Underground PWS station ID and API key or a supported Peet Bros serial device. Fetch and review the observation. Choose APRS-IS or RF and, for RF, select the weather path; this path and route are remembered. Send once, or configure the source and interval and start weather beaconing from Weather or the Beacon menu. Weather packets use your base callsign with SSID `-13`. Automatic weather beaconing runs only while the app is open, pauses on failed or stale observations, and retries at the next interval. Weather Underground credentials and serial hardware have not yet been verified with live devices in this project.
 

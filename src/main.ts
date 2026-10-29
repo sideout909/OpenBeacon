@@ -41,7 +41,7 @@ import {
   type Theme,
   type WeatherObservation,
 } from "./desktop";
-import { MapStationStores, StationStore } from "./stations";
+import { MapStationStores, StationStore, matchesSource } from "./stations";
 import { MessageInbox } from "./messages";
 import { showPacket } from "./packet-view";
 import { type DecodedPacket, sourceLabel } from "./aprs";
@@ -200,7 +200,9 @@ function startApp() {
     el("map-message").hidden = false;
   });
   const stationStore = new StationStore();
+  const stationSourceStores = new MapStationStores();
   const mapStationStores = new MapStationStores();
+  let pickingFixedLocation = false;
   type MapSourceMode = "all" | "rf" | "direct";
   const storedMapMode = localStorage.getItem("openbeacon-map-source");
   let mapSourceMode: MapSourceMode =
@@ -224,8 +226,12 @@ function startApp() {
     dirty = true;
     if (selected && !activeMapStore().stations.has(selected)) {
       selected = null;
+      selectedStore = null;
       el("details").hidden = true;
-    } else updateDetails();
+    } else {
+      if (selected) selectedStore = activeMapStore();
+      updateDetails();
+    }
   };
   let mapCleared = false;
   const stations = stationStore.stations;
@@ -260,6 +266,7 @@ function startApp() {
     if (ageOn.checked) dirty = true;
   }, 15000);
   let selected: string | null = null;
+  let selectedStore: StationStore | null = null;
   let dirty = false;
   let recent: DecodedPacket[] = [];
   let sentPacket: { raw: string; until: number } | null = null;
@@ -525,10 +532,7 @@ function startApp() {
   }
   function updateDetails() {
     if (!selected) return;
-    const s =
-      (mapSourceMode !== "all"
-        ? activeMapStore().stations.get(selected)
-        : undefined) ?? stations.get(selected);
+    const s = selectedStore?.stations.get(selected) ?? stations.get(selected);
     if (!s) return;
     el("station-name").textContent = s.callsign;
     const icon = el("station-detail-icon");
@@ -600,24 +604,23 @@ function startApp() {
     const query = el<HTMLInputElement>("station-search")
       .value.trim()
       .toUpperCase();
-    const rfOnly = el<HTMLInputElement>("station-source").checked;
-    const matches = [...stations.values()]
+    const mode = el<HTMLSelectElement>("station-source").value;
+    const sourceStations =
+      mode === "all"
+        ? stations
+        : stationSourceStores.active(true, mode === "direct").stations;
+    const matches = [...sourceStations.values()]
       .reverse()
-      .filter(
-        (station) =>
-          (!rfOnly || station.source === "rf") &&
-          station.callsign.includes(query),
-      );
+      .filter((station) => station.callsign.includes(query));
     const root = el("stations-list");
     el("stations-summary").textContent =
-      rfOnly &&
-      ![...stations.values()].some((station) => station.source === "rf")
+      mode !== "all" && sourceStations.size === 0
         ? "No RF station positions received yet."
         : stations.size === 0
           ? "No station positions received yet. Connect APRS-IS to see live stations."
           : matches.length === 0
             ? "No matching callsigns."
-            : `${matches.length.toLocaleString()} of ${stations.size.toLocaleString()} stations · ${matches.length > 200 ? "showing the 200 most recent · refine search" : "most recently received first"}`;
+            : `${matches.length.toLocaleString()} of ${sourceStations.size.toLocaleString()} stations · ${matches.length > 200 ? "showing the 200 most recent · refine search" : "most recently received first"}`;
     root.replaceChildren();
     for (const station of matches.slice(0, 200)) {
       const button = document.createElement("button");
@@ -633,7 +636,12 @@ function startApp() {
       info.textContent = `${sourceLabel(station.source)} · ${new Date(station.heardAt).toLocaleString()}`;
       button.append(name, info);
       button.onclick = () => {
-        selectStation(station.callsign);
+        selectStation(
+          station.callsign,
+          mode === "all"
+            ? stationStore
+            : stationSourceStores.active(true, mode === "direct"),
+        );
         map.flyTo({
           center: [station.longitude, station.latitude],
           essential: true,
@@ -642,9 +650,13 @@ function startApp() {
       root.append(button);
     }
   }
-  function selectStation(call: string) {
+  function selectStation(
+    call: string,
+    sourceStore: StationStore = stationStore,
+  ) {
     if (!stations.has(call)) return;
     selected = call;
+    selectedStore = sourceStore;
     el("details").hidden = false;
     updateDetails();
     renderStations();
@@ -890,6 +902,7 @@ function startApp() {
     outbox = outbox.slice(0, 200);
     el<HTMLTextAreaElement>("message-text").value = "";
     el("message-send-status").textContent = "Message added to the outbox.";
+    el<HTMLDialogElement>("message-compose-dialog").close();
     void sendMessage(item);
   };
   function observeMessageTraffic(
@@ -1023,19 +1036,26 @@ function startApp() {
     if (!selected) return;
     el<HTMLInputElement>("message-to").value = selected;
     el("messages-button").click();
+    el<HTMLDialogElement>("message-compose-dialog").showModal();
     el<HTMLTextAreaElement>("message-text").focus();
   };
   function renderWeatherStations() {
     const root = el("weather-stations");
-    const rfOnly = el<HTMLInputElement>("weather-rf-only").checked;
-    const packets = [...weatherPackets.values()]
-      .reverse()
-      .filter((packet) => !rfOnly || packet.origin === "rf");
+    const mode = el<HTMLSelectElement>("weather-rf-only").value;
+    const seen = new Set<string>();
+    const packets = [...weatherPackets.values()].reverse().filter((packet) => {
+      if (!matchesSource(packet, mode)) return false;
+      const key = `${packet.origin}:${packet.source.toUpperCase()}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
     root.replaceChildren();
     if (!packets.length) {
-      root.textContent = rfOnly
-        ? "No RF weather packets received yet."
-        : "No weather packets received yet.";
+      root.textContent =
+        mode !== "all"
+          ? "No RF weather packets received yet."
+          : "No weather packets received yet.";
       root.className = "message-note";
       return;
     }
@@ -1054,7 +1074,7 @@ function startApp() {
       root.append(button);
     }
   }
-  el<HTMLInputElement>("weather-rf-only").onchange = renderWeatherStations;
+  el<HTMLSelectElement>("weather-rf-only").onchange = renderWeatherStations;
   function packetType(packet: DecodedPacket): string {
     if (packet.weather) return "weather";
     if (packet.message) return "message";
@@ -1066,11 +1086,11 @@ function startApp() {
     const search = el<HTMLInputElement>("monitor-search")
       .value.trim()
       .toUpperCase();
-    const rf = el<HTMLInputElement>("monitor-rf-only").checked;
+    const mode = el<HTMLSelectElement>("monitor-rf-only").value;
     const type = el<HTMLSelectElement>("monitor-type").value;
     const matches = packets.filter(
       (packet) =>
-        (!rf || packet.origin === "rf") &&
+        matchesSource(packet, mode) &&
         (type === "all" || packetType(packet) === type) &&
         (!search ||
           `${packet.source} ${packet.destination} ${packet.message?.addressee ?? ""} ${packet.raw}`
@@ -1136,7 +1156,7 @@ function startApp() {
     map.resize();
   };
   el<HTMLInputElement>("monitor-search").oninput = renderMonitor;
-  el<HTMLInputElement>("monitor-rf-only").onchange = renderMonitor;
+  el<HTMLSelectElement>("monitor-rf-only").onchange = renderMonitor;
   el<HTMLSelectElement>("monitor-type").onchange = renderMonitor;
   el("monitor-pause").onclick = () => {
     if (monitorSnapshot) {
@@ -1571,14 +1591,22 @@ function startApp() {
     }
   };
 
-  function showInbox(bbs: boolean) {
-    el("aprs-inbox").hidden = bbs;
-    el("bbs-inbox").hidden = !bbs;
-    el("aprs-inbox-tab").setAttribute("aria-pressed", String(!bbs));
-    el("bbs-inbox-tab").setAttribute("aria-pressed", String(bbs));
+  const messageComposeDialog = el<HTMLDialogElement>("message-compose-dialog");
+  el("new-message").onclick = () => {
+    el("message-send-status").textContent =
+      "Messages are sent once; use Resend if no acknowledgement arrives.";
+    messageComposeDialog.showModal();
+  };
+  el("close-message-compose").onclick = () => messageComposeDialog.close();
+  for (const id of ["weather-forecast-details", "weather-station-details"]) {
+    const section = el<HTMLDetailsElement>(id);
+    const key = `openbeacon-${id}-open`;
+    const saved = localStorage.getItem(key);
+    if (saved !== null) section.open = saved === "true";
+    section.addEventListener("toggle", () =>
+      localStorage.setItem(key, String(section.open)),
+    );
   }
-  el("aprs-inbox-tab").onclick = () => showInbox(false);
-  el("bbs-inbox-tab").onclick = () => showInbox(true);
   el("stations-button").onclick = () => showStations(true);
   el("map-button").onclick = () => showStations(false);
   map.on("click", () => {
@@ -1593,12 +1621,18 @@ function startApp() {
       showStations(false);
   });
   el<HTMLInputElement>("station-search").oninput = renderStations;
-  el<HTMLInputElement>("station-source").onchange = renderStations;
+  el<HTMLSelectElement>("station-source").onchange = () => {
+    selected = null;
+    selectedStore = null;
+    el("details").hidden = true;
+    renderStations();
+  };
   for (const layer of ["station-dot", "station-icon"]) {
     map.on("click", layer, (e) => {
+      if (pickingFixedLocation) return;
       const call = e.features?.[0]?.properties?.callsign;
       if (typeof call === "string") {
-        selectStation(call);
+        selectStation(call, activeMapStore());
       }
     });
     map.on(
@@ -1614,7 +1648,9 @@ function startApp() {
     renderStations();
   };
   el("show-packet").onclick = () => {
-    const station = selected && stations.get(selected);
+    const station =
+      selected &&
+      (selectedStore?.stations.get(selected) ?? stations.get(selected));
     if (station) inspectPacket(station.packet);
   };
   function renderPackets() {
@@ -2690,7 +2726,7 @@ function startApp() {
   }
   function beaconRouteLabel() {
     return el<HTMLSelectElement>("beacon-route").value === "rf"
-      ? "RF TNC"
+      ? "RF"
       : "APRS-IS";
   }
   async function scheduledBeacon(generation: number) {
@@ -2928,7 +2964,11 @@ function startApp() {
     )
       void sendMobileFix(beaconScheduleGeneration, fix);
   }, 1000);
-  el("beacon-start").onclick = () => void startAutoBeacon();
+  el("beacon-start").onclick = () => {
+    if (el<HTMLSelectElement>("beacon-mode").value === "mobile")
+      el<HTMLButtonElement>("mobile-start").click();
+    else void startAutoBeacon();
+  };
   el("beacon-stop").onclick = () =>
     stopBeaconSchedule(
       beaconSending
@@ -2936,6 +2976,14 @@ function startApp() {
         : "Automatic beaconing stopped.",
     );
   const beaconMenu = el("beacon-menu");
+  el("stop-all-beacons").onclick = () => {
+    stopBeaconSchedule(
+      "Position beaconing stopped. A send already in progress may still complete.",
+    );
+    stopWeatherBeacon(
+      "Weather beacon stopped. A packet already handed to the TNC may still transmit.",
+    );
+  };
   function closeBeaconMenu() {
     beaconMenu.hidden = true;
     el("tx-button").setAttribute("aria-expanded", "false");
@@ -2986,6 +3034,54 @@ function startApp() {
     updateBeaconMode();
     beaconDialog.showModal();
   }
+  let mapLocationClick: ((event: maplibre.MapMouseEvent) => void) | null = null;
+  function finishMapLocationPick() {
+    if (mapLocationClick) map.off("click", mapLocationClick);
+    mapLocationClick = null;
+    pickingFixedLocation = false;
+    el("map-location-picker").hidden = true;
+    map.getCanvas().style.cursor = "";
+  }
+  el("cancel-map-location").onclick = () => {
+    finishMapLocationPick();
+    openBeaconSettings();
+  };
+  el("beacon-pick-map").onclick = () => {
+    beaconDialog.close();
+    pickingFixedLocation = true;
+    el("map-location-picker").hidden = false;
+    map.getCanvas().style.cursor = "crosshair";
+    mapLocationClick = (event) => {
+      const { lat, lng } = event.lngLat;
+      finishMapLocationPick();
+      void (async () => {
+        try {
+          const settings = {
+            ...currentSettings(),
+            lat,
+            lon: ((((lng + 180) % 360) + 360) % 360) - 180,
+            location_set: true,
+          };
+          await desktop.saveSettings(settings);
+          applySettings(settings);
+          localStorage.setItem(
+            "openbeacon-location",
+            JSON.stringify({
+              lat: settings.lat,
+              lon: settings.lon,
+              radius: settings.radius,
+            }),
+          );
+          openBeaconSettings();
+        } catch (error) {
+          openBeaconSettings();
+          el("beacon-status").textContent =
+            `Could not save location: ${String(error)}`;
+        }
+      })();
+    };
+    map.on("click", mapLocationClick);
+  };
   function updateBeaconIndicator() {
     const statuses: string[] = [];
     if (beaconScheduleActive)
@@ -2996,7 +3092,7 @@ function startApp() {
       statuses.push(
         weatherBeaconPaused
           ? "Weather paused"
-          : `Weather · ${wxRoute.value === "rf" ? "RF TNC" : "APRS-IS"}`,
+          : `Weather · ${wxRoute.value === "rf" ? "RF" : "APRS-IS"}`,
       );
     el("tx-button").querySelector("small")!.textContent =
       statuses.join(" / ") || "Stopped";
@@ -3011,24 +3107,33 @@ function startApp() {
       ? "Stop automatic beaconing"
       : "Start automatic beaconing";
     const mobile = el<HTMLSelectElement>("beacon-mode").value === "mobile";
+    for (const [id, selectedTab] of [
+      ["beacon-fixed-tab", !mobile],
+      ["beacon-mobile-tab", mobile],
+    ] as const) {
+      const tab = el<HTMLButtonElement>(id);
+      tab.setAttribute("aria-pressed", String(selectedTab));
+      tab.disabled = beaconScheduleActive;
+    }
     el("fixed-beacon").hidden = mobile;
     el("mobile-beacon").hidden = !mobile;
+    intervalInput.required = !mobile;
     el<HTMLButtonElement>("send-beacon").disabled =
       beaconSending ||
       beaconScheduleActive ||
-      mobile ||
-      !fixedPosition(configuredLocation, freshGps()) ||
+      !(mobile ? freshGps() : fixedPosition(configuredLocation, freshGps())) ||
       !savedCallsign;
     el<HTMLButtonElement>("beacon-start").disabled =
       beaconSending ||
       beaconScheduleActive ||
-      mobile ||
-      !fixedPosition(configuredLocation, freshGps()) ||
+      !(mobile ? freshGps() : fixedPosition(configuredLocation, freshGps())) ||
       !savedCallsign;
     el<HTMLButtonElement>("beacon-stop").disabled = !beaconScheduleActive;
     el<HTMLButtonElement>("mobile-start").disabled =
       beaconSending || beaconScheduleActive || !savedCallsign || !freshGps();
     el<HTMLButtonElement>("mobile-stop").disabled = !mobileActive;
+    el<HTMLButtonElement>("beacon-pick-map").disabled =
+      beaconScheduleActive || beaconSending;
     for (const id of smartIds)
       el<HTMLInputElement>(id).disabled = beaconScheduleActive;
     intervalInput.disabled = beaconScheduleActive;
@@ -3036,6 +3141,15 @@ function startApp() {
     el<HTMLSelectElement>("beacon-route").disabled = beaconScheduleActive;
   }
   el<HTMLSelectElement>("beacon-mode").onchange = updateBeaconMode;
+  for (const [id, mode] of [
+    ["beacon-fixed-tab", "fixed"],
+    ["beacon-mobile-tab", "mobile"],
+  ] as const) {
+    el(id).onclick = () => {
+      el<HTMLSelectElement>("beacon-mode").value = mode;
+      updateBeaconMode();
+    };
+  }
   const beaconRoute = el<HTMLSelectElement>("beacon-route");
   const storedRoute = localStorage.getItem("openbeacon-beacon-route");
   if (storedRoute === "rf" || storedRoute === "ip")
@@ -3059,19 +3173,23 @@ function startApp() {
     if (
       beaconSending ||
       beaconScheduleActive ||
-      el<HTMLSelectElement>("beacon-mode").value !== "fixed" ||
-      !fixedPosition(configuredLocation, freshGps()) ||
+      !(el<HTMLSelectElement>("beacon-mode").value === "mobile"
+        ? freshGps()
+        : fixedPosition(configuredLocation, freshGps())) ||
       !savedCallsign
     )
       return;
-    const selectedPosition = fixedPosition(configuredLocation, freshGps());
+    const selectedPosition =
+      el<HTMLSelectElement>("beacon-mode").value === "mobile"
+        ? freshGps()
+        : fixedPosition(configuredLocation, freshGps())?.position;
     if (!selectedPosition) return;
     beaconSending = true;
     const button = el<HTMLButtonElement>("send-beacon");
     button.disabled = true;
     el("beacon-status").textContent = "Connecting and verifying login…";
     try {
-      const packet = await sendConfiguredBeacon(selectedPosition.position);
+      const packet = await sendConfiguredBeacon(selectedPosition);
       showSentPacket(packet);
       el("beacon-status").textContent =
         `Beacon written to ${beaconRouteLabel()}.`;
@@ -3495,7 +3613,8 @@ function startApp() {
     const newMessage = receivedMessages.observe(packet, savedCallsign);
     observeMessageTraffic(packet, restoringHistory, newMessage);
     if (packet.weather && packet.source) {
-      const key = `${packet.origin}:${packet.source.toUpperCase()}`;
+      const direct = matchesSource(packet, "direct") ? "direct" : "other";
+      const key = `${packet.origin}:${packet.source.toUpperCase()}:${direct}`;
       weatherPackets.delete(key);
       weatherPackets.set(key, packet);
       if (weatherPackets.size > 5000)
@@ -3503,6 +3622,7 @@ function startApp() {
     }
     if (packet.position && packet.source) {
       const evicted = stationStore.observe(packet);
+      stationSourceStores.observe(packet);
       if (!restoringHistory || !mapCleared) mapStationStores.observe(packet);
       if (selected === evicted) {
         selected = null;

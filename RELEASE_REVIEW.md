@@ -1,27 +1,25 @@
 # Release review
 
-Review of the working tree for the first release. Automated checks and compilation are not substitutes for testing the packaged app on target machines and hardware.
+This record describes the initial 0.2.1 release and distinguishes operator reports from automated checks. See [USER_GUIDE.md](USER_GUIDE.md) for operation and [ROADMAP.md](ROADMAP.md) for follow-up work.
 
-## Public test release: limitations and follow-up
+## Reported operating results
 
-- **Windows acceptance:** The Windows executable and map downloader need a successful CI build; Win11 testers can help verify startup, first-run maps, APRS-IS, GPS/TNC discovery and shutdown. No Windows hardware or on-air transmission has been verified yet. The unsigned executable may prompt Windows SmartScreen.
-- **Linux distribution:** Earlier local binaries require GLIBC 2.43. The Linux build workflow uses Ubuntu 24.04 to provide a more useful baseline; testers can help check the resulting archive on a clean supported distribution, including WebKitGTK and audio dependencies.
-- **Radio and weather:** The 1.8.2 development snapshot includes upstream fixes for CVE-2025-34457 and CVE-2025-34458 and retains the local receive-only patch. The operator reports successful RF and APRS-IS beaconing over approximately two days (October 28, 2026). The rebuilt sidecar and additional RF interfaces still need verification with available hardware. GPS phone input, Peet Bros and Weather Underground integration have not been verified live.
-- **Maps and licensing:** Map packs are not distributed with the archives. Downloaded map data, external providers, APRS symbols with mixed/unknown provenance, and dependency distribution notices need a release-specific licensing review. See THIRD-PARTY-NOTICES.md. Packaging and offline recovery need clean-install tests.
-- **Position and privacy:** APRS-IS and RF transmissions publish the station's position and are explicitly started by the user. APRS-IS uses the standard unencrypted connection; stored APRS-IS and Weather Underground credentials are local files, not an OS credential vault. UDP GPS accepts packets from reachable senders. Test on trusted networks.
-- **Maturity:** BBS, object/item support and automatic message retries are incomplete; platform-specific maps, GPS and radio behavior should not be presented as universally verified. The OpenBeacon TOCALL is pending.
+- The owner reports approximately two days of successful position beaconing over RF and APRS-IS, and successful RF messaging with acknowledgements.
+- The owner reports that the TM-D710A in KISS mode sends and receives in OpenBeacon. TS-2000 native TNC reception and transmission were also exercised; additional TNCs and queue/reconnect behavior need broader testing.
+- The owner reports that the Windows 11 app ran well, online maps worked, and the beta.2-to-beta.3 Windows in-app update installed and reopened with existing settings. One Windows offline map download had succeeded earlier.
+- The clean-install setup wizard was exercised locally by the owner. Another operator reported installing and running OpenBeacon on a DigiPi; the device and features tested were not independently verified.
+- A Linux direct command-line extract of the contiguous U.S. at zoom 12 completed and its archive was verified. The owner reported app-driven large-map failures on Linux and Windows; the underlying cause remains unknown.
 
-## Verification performed
+## Current limitations
 
-- `npm run check`: formatting, TypeScript and Rust lint, Rust/TypeScript tests, frontend build.
-- GPS tests simulate serial, TCP, UDP and gpsd traffic at the backend, including malformed data and disconnects; they do not exercise the full GUI and beacon pipeline.
-- The Dire Wolf 1.8.2 snapshot was rebuilt with the existing patch and its help output inspected. Radio reception and receive-only behavior need a hardware test.
-- `npm audit --omit=dev --audit-level=high` reported no production JavaScript vulnerabilities at review time. This is not a complete dependency or security audit.
+- Download failures restart from the beginning; resume and size estimates are not implemented. A zoom-6 world overview is bundled, and users can import a compatible local map.
+- The Linux x86-64 AppImage bundles a modified receive-only Dire Wolf. Windows can use an external Dire Wolf through TCP KISS; the Windows external-modem integration needs physical verification. macOS and native ARM release artifacts are not published.
+- Linux in-app update on a slow connection failed while reading the download. The later updater allows a longer download timeout and reports progress, but the new Linux upgrade path still needs a real update test. Windows installers are not Authenticode-signed and may trigger SmartScreen.
+- GPS phone integrations, Peet Bros weather hardware, live Weather Underground operation and mobile SmartBeaconing need more physical testing. Credentials are stored locally, not in an OS credential vault; APRS-IS and APRS messages are not private.
+- BBS access, objects/items and automatic message retries are not implemented. The OpenBeacon TOCALL remains pending. See [third-party notices](THIRD-PARTY-NOTICES.md) for map, symbol and dependency terms, including mixed or unknown original APRS symbol provenance.
 
-## User acceptance tests
+## Verification and future testing
 
-1. Extract the archive into a new folder. Start the app and verify normal launch and exit.
-2. Configure a small map region, download it, restart, and verify the region works offline. Test online mode separately if desired.
-3. Configure a callsign, manual location and APRS-IS filter; receive stations and inspect a packet. Check that changing the radius requires reconnecting.
-4. Connect the intended TNC and GPS, check received data, then test controlled one-time position, message and weather transmission only when the hardware and settings are ready. Stop active schedules and verify they do not resume on restart.
-5. On Windows, repeat map and receiver tests on the Win11 machine; verify WebView2, serial ports, antivirus prompts and shutdown behavior. On Linux, repeat on a clean supported machine.
+`npm run check` runs formatting, TypeScript and Rust linting, tests and the frontend build. Tests exercise packet parsing, simulated GPS transports, KISS framing, source filters, update-feed validation and map-download diagnostics. They do not replace a clean-install or over-the-air test. GitHub Actions build Windows and Linux release artifacts and sign update payloads; review the individual release workflow and feed before treating a build as published.
+
+Community testing is especially useful for offline maps, additional serial/TCP TNCs, GPS sources, weather devices, Linux distributions and upgrade paths. Report OS and app versions, device details and error text without credentials or private location data.

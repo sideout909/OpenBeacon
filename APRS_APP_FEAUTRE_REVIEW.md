@@ -1,3 +1,7 @@
+# APRS application feature research
+
+This is an early comparative research note, not a verified support matrix. Features and availability may differ between versions; see the README and roadmap for OpenBeacon’s current capabilities.
+
 The APRS applications reviewed (**PinPoint APRS**, **YAAC**, **APRSISCE/32**, **Xastir**, and **UI-View32**) share a core set of standard functionalities essential to the APRS protocol and amateur radio packet operations.
 
 Here is the breakdown of the features common across all five software clients:

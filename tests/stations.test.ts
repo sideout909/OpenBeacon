@@ -1,6 +1,10 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { MapStationStores, StationStore } from "../src/stations.ts";
+import {
+  MapStationStores,
+  StationStore,
+  matchesSource,
+} from "../src/stations.ts";
 import type { DecodedPacket } from "../src/aprs.ts";
 
 function packet(source: string, time: number): DecodedPacket {
@@ -98,4 +102,16 @@ test("direct RF view excludes repeated and internet observations without losing 
   assert.equal(store.active(false).stations.has("TWO"), true);
   store.clear();
   assert.equal(store.active(true, true).stations.size, 0);
+});
+
+test("all, RF and direct RF packet filters distinguish repeated paths", () => {
+  const direct = packet("one", 1);
+  direct.path = ["WIDE1-1", "WIDE2-1"];
+  const repeated = { ...direct, path: ["DIGI-1*", "WIDE2-1"] };
+  const internet = { ...direct, origin: "aprs-is" as const };
+  assert.equal(matchesSource(direct, "direct"), true);
+  assert.equal(matchesSource(repeated, "direct"), false);
+  assert.equal(matchesSource(repeated, "rf"), true);
+  assert.equal(matchesSource(internet, "rf"), false);
+  assert.equal(matchesSource(internet, "all"), true);
 });
