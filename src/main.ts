@@ -3091,6 +3091,20 @@ function startApp() {
         : "Automatic beaconing stopped.",
     );
   const beaconMenu = el("beacon-menu");
+  el("start-all-beacons").onclick = () => {
+    const mobile = el<HTMLSelectElement>("beacon-mode").value === "mobile";
+    const positionConfigured =
+      localStorage.getItem(
+        mobile ? "openbeacon-smart-settings" : "openbeacon-beacon-interval",
+      ) !== null;
+    if (positionConfigured && !beaconScheduleActive)
+      el<HTMLButtonElement>("beacon-start").click();
+    if (
+      localStorage.getItem("openbeacon-weather-interval") !== null &&
+      !weatherBeaconActive
+    )
+      wxStart.click();
+  };
   el("stop-all-beacons").onclick = () => {
     stopBeaconSchedule(
       "Position beaconing stopped. A send already in progress may still complete.",
