@@ -671,6 +671,23 @@ pub fn connect_serial_tnc(
                     if !active(&token, generation) {
                         break;
                     }
+                    // Windows serialport disables RTS with flow control set to none.
+                    // Some D710 serial adapters require RTS asserted to pass data.
+                    // This is not hardware flow control; leave CTS handshaking disabled.
+                    #[cfg(target_os = "windows")]
+                    if mode == "d710kiss" && flow == "none" {
+                        if let Err(error) = stream.write_request_to_send(true) {
+                            report(
+                                &app,
+                                generation,
+                                "stopped",
+                                format!("Could not assert D710 serial RTS: {error}"),
+                                received,
+                                errors,
+                            );
+                            break;
+                        }
+                    }
                     let mut ts2000_unconfirmed = false;
                     if mode == "ts2000kiss" {
                         report(
