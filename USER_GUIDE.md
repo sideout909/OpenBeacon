@@ -65,6 +65,8 @@ Open **Messages** to read APRS messages addressed to your configured station. Se
 
 ## Weather
 
+The header’s **Start all beacons** starts previously saved position and weather schedules using their current settings. Start each schedule once from its settings to include it. **Stop all beacons** stops both schedules; a send already in progress may still complete. The currently selected position mode is used, and normal location, GPS, passcode and source checks still apply.
+
 Open **Weather** for the local NWS forecast and received weather stations. The forecast and personal weather sections can be collapsed, and their state is remembered. A forecast uses a current GPS fix or manual location and requires internet access within NWS coverage. The Stations, Weather and Traffic Monitor source controls offer all, RF, and direct RF views; direct RF relies on the TNC's reported digipeater-used markers.
 
 For your own station, configure a Weather Underground PWS station ID and API key or a supported Peet Bros serial device. Fetch and review the observation. Choose APRS-IS or RF and, for RF, select the weather path; this path and route are remembered. Send once, or configure the source and interval and start weather beaconing from Weather or the Beacon menu. Weather packets use your base callsign with SSID `-13`. Automatic weather beaconing runs only while the app is open, pauses on failed or stale observations, and retries at the next interval. Weather Underground credentials and serial hardware have not yet been verified with live devices in this project.
