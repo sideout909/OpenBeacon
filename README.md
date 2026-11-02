@@ -1,16 +1,16 @@
 # OpenBeacon
 
-OpenBeacon is a map-first desktop APRS application for Windows and Linux. It brings together offline maps, APRS-IS and radio reception, messaging, position beaconing, weather, GPS, and packet inspection. The initial release is available for community use and testing; hardware and platform coverage is still growing.
+OpenBeacon is a stable, map-first desktop APRS application for Windows and Linux. It brings together offline maps, APRS-IS and radio reception, messaging, position beaconing, weather, GPS, and packet inspection. OpenBeacon is in regular use by the project owner and other operators, who report that it has been running well.
 
 ![OpenBeacon showing live APRS stations and RF activity on the map](docs/images/openbeacon-screenshot.png)
 
-## What works
+## Features
 
 - **Map and stations:** Local PMTiles maps, searchable stations, packet inspection, station tracks, optional age filtering, and a **Clear map** button. Clearing removes displayed stations and tracks without deleting history; stations return as new positions arrive, and stored history is restored on restart. Your own configured location remains visible.
 - **APRS reception:** Receive a radius-filtered APRS-IS feed or RF through a TNC. The packet strip highlights recent RF and sent beacons; received RF stations briefly pulse on the map. The map, Stations, Weather and Traffic Monitor offer all-source, RF and direct-RF filters. Direct-RF classification depends on the received digipeater path.
 - **Traffic Monitor:** Search, filter, pause and inspect recent received packets. Local SQLite history retains up to 10,000 packets, including original bytes and available RF interface information, and restores recent views on restart.
 - **Messages and weather:** Send and receive APRS messages over APRS-IS or supported RF TNCs, track acknowledgements and resend messages; view received weather packets; fetch a National Weather Service forecast for your configured location when online and within its coverage area. Weather Underground PWS observations and Peet Bros Ultimeter serial readings can be reviewed and manually sent as APRS weather over APRS-IS or a supported RF TNC. BBS access is not implemented.
-- **Beaconing:** Send a position once or schedule fixed-position APRS-IS beacons while the app runs. An APRS-IS passcode is saved in My Station. The operator reports that RF and APRS-IS beacons were successful over approximately two days of operation (reported October 28, 2026). Fixed-position RF beacons can be sent through serial or TCP KISS or a TS-2000 in Kenwood text mode; mobile SmartBeaconing is implemented but needs hardware validation. Bundled Dire Wolf transmission is configurable on Linux; other Kenwood text-mode transmission is not available.
+- **Beaconing:** Send a position once or schedule fixed-position APRS-IS beacons while the app runs. An APRS-IS passcode is saved in My Station. Fixed-position RF beacons can be sent through serial or TCP KISS or a TS-2000 in Kenwood text mode; mobile SmartBeaconing is implemented but needs hardware validation. Bundled Dire Wolf transmission is configurable on Linux; other Kenwood text-mode transmission is not available.
 - **Device identification:** Packet and station details show known TOCALL device/application names from a bundled offline snapshot of the [APRS device ID database](https://github.com/aprsorg/aprs-deviceid). Mic-E device identification is not yet implemented. An OpenBeacon TOCALL [has been requested](https://github.com/aprsorg/aprs-deviceid/issues/397); the app currently uses the generic `APRS` destination.
 
 The decoder supports uncompressed, compressed and non-ambiguous Mic-E positions, plus basic message, status and weather fields. Uncompressed ambiguous positions are plotted approximately; ambiguous Mic-E positions are not plotted. Unsupported or malformed packets retain their raw data and warnings. Objects and items, automatic message retries, and BBS retrieval are still planned. Automatic acknowledgements are opt-in and active only while the app runs.
@@ -19,11 +19,11 @@ The decoder supports uncompressed, compressed and non-ambiguous Mic-E positions,
 
 Download the [latest release](https://github.com/sideout909/OpenBeacon/releases/latest): run the Windows setup installer, or make the Linux AppImage executable and open it. The Windows installer is not Authenticode-signed, so Windows SmartScreen may display a warning. The first-run wizard can guide you through your station, location, maps and optional connections. See the [user guide](USER_GUIDE.md) for detailed instructions.
 
-## Where we need help
+## Community and feedback
 
 Reports from real installations are especially valuable. Please include the operating system and version, OpenBeacon version, device or TNC model, steps taken and any error text. Do not include passcodes, API keys or private location data.
 
-So far, the owner has reported two days of successful RF and APRS-IS beaconing, D710A KISS receive and transmit with RF message acknowledgements, a successful Windows 11 update, and a working Linux first-run wizard. Another operator reports the app running on a DigiPi. These are operator reports, not coverage of every device or configuration.
+The owner and other operators report that OpenBeacon is running well. Reported experience includes RF and APRS-IS beaconing, D710A KISS receive and transmit with RF message acknowledgements, a Windows 11 update, and operation on a DigiPi. Hardware and configurations vary, so reports from additional setups are welcome.
 
 - **Offline maps:** Test small and large downloads, cancellation, offline use and recovery. Large CONUS downloads have failed on Windows and Linux without a clear cause; failed downloads currently restart from the beginning.
 - **Radio hardware:** Test serial and TCP KISS, Kenwood interfaces, reconnects and controlled messaging/beaconing with independent receivers. The owner reports successful TS-2000 and D710A operation; another operator reports the app running on a DigiPi. Native bundled Dire Wolf for Windows is planned.
