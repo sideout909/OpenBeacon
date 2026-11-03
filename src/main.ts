@@ -2,6 +2,7 @@ import { check as checkUpdate, type Update } from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { updateBlocked, updateDownloadDetails } from "./update-control";
+import { savedBeaconRoute } from "./beacon-routes";
 import { shouldStartSetup } from "./setup-wizard";
 import {
   connectionLocation,
@@ -1409,9 +1410,11 @@ function startApp() {
   if (savedWxPath !== null) setWeatherPath(savedWxPath);
   function syncWeatherRoute() {
     el("weather-rf-path-label").hidden = wxRoute.value !== "rf";
-    localStorage.setItem("openbeacon-weather-route", wxRoute.value);
   }
-  wxRoute.onchange = syncWeatherRoute;
+  wxRoute.onchange = () => {
+    localStorage.setItem("openbeacon-weather-route", wxRoute.value);
+    syncWeatherRoute();
+  };
   wxSource.onchange = () =>
     localStorage.setItem("openbeacon-weather-source", wxSource.value);
   syncWeatherRoute();
@@ -1511,6 +1514,7 @@ function startApp() {
       return;
     }
     const interval = Number(wxInterval.value) * 60000;
+    localStorage.setItem("openbeacon-weather-route", route);
     localStorage.setItem("openbeacon-weather-interval", wxInterval.value);
     const generation = ++weatherBeaconGeneration;
     weatherBeaconActive = true;
@@ -2911,6 +2915,10 @@ function startApp() {
       }
       fixedBeaconPosition = selectedPosition.position;
       fixedBeaconRequiresGps = selectedPosition.requiresGps;
+      localStorage.setItem(
+        "openbeacon-beacon-route",
+        beaconRouteLabel() === "RF" ? "rf" : "ip",
+      );
       localStorage.setItem("openbeacon-beacon-interval", intervalInput.value);
       beaconScheduleActive = true;
       updateBeaconMode();
@@ -3017,6 +3025,10 @@ function startApp() {
           ),
         ),
       );
+      localStorage.setItem(
+        "openbeacon-beacon-route",
+        beaconRouteLabel() === "RF" ? "rf" : "ip",
+      );
       beaconScheduleActive = true;
       mobileActive = true;
       lastMobileTime = 0;
@@ -3097,13 +3109,37 @@ function startApp() {
       localStorage.getItem(
         mobile ? "openbeacon-smart-settings" : "openbeacon-beacon-interval",
       ) !== null;
-    if (positionConfigured && !beaconScheduleActive)
-      el<HTMLButtonElement>("beacon-start").click();
+    if (positionConfigured && !beaconScheduleActive) {
+      const route = savedBeaconRoute(
+        localStorage.getItem("openbeacon-beacon-route"),
+      );
+      if (route) {
+        el<HTMLSelectElement>("beacon-route").value = route;
+        el<HTMLButtonElement>("beacon-start").click();
+      } else {
+        openBeaconSettings();
+        el("beacon-schedule-state").textContent =
+          "Select a route and start the position beacon to save it.";
+      }
+    }
     if (
       localStorage.getItem("openbeacon-weather-interval") !== null &&
       !weatherBeaconActive
-    )
-      wxStart.click();
+    ) {
+      const route = savedBeaconRoute(
+        localStorage.getItem("openbeacon-weather-route"),
+      );
+      if (route) {
+        wxRoute.value = route;
+        syncWeatherRoute();
+        wxStart.click();
+      } else {
+        el<HTMLDetailsElement>("weather-station-details").open = true;
+        el("weather-button").click();
+        wxScheduleStatus.textContent =
+          "Select a route and start the weather beacon to save it.";
+      }
+    }
   };
   el("stop-all-beacons").onclick = () => {
     stopBeaconSchedule(
