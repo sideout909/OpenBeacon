@@ -77,9 +77,11 @@ pub async fn send_aprs_message(
             {
                 return Err("Save a valid APRS-IS passcode in My Station.".into());
             }
-            tauri::async_runtime::spawn_blocking(move || beacon::transmit(&call, &passcode, &body))
-                .await
-                .map_err(|e| e.to_string())?
+            tauri::async_runtime::spawn_blocking(move || {
+                beacon::transmit(&app, &call, &passcode, &body)
+            })
+            .await
+            .map_err(|e| e.to_string())?
         }
         _ => Err("Choose APRS-IS or RF.".into()),
     }

@@ -1,6 +1,22 @@
 # Release review
 
-OpenBeacon 0.2.3 is a stable release in use by the owner and other operators, who report that it is running well. This record distinguishes reported operating experience from automated checks and tracks areas needing further coverage. See [USER_GUIDE.md](USER_GUIDE.md) for operation and [ROADMAP.md](ROADMAP.md) for follow-up work.
+OpenBeacon is a stable application in use by the owner and other operators, who report that it is running well. This record distinguishes reported operating experience from automated checks and tracks areas needing further coverage. See [USER_GUIDE.md](USER_GUIDE.md) for operation and [ROADMAP.md](ROADMAP.md) for follow-up work.
+
+## Version 0.2.5 changes and verification
+
+Version 0.2.5 introduces OpenBeacon's allocated TOCALL `APOBCN` and one managed APRS-IS session for reception, iGate uploads and locally generated sends. It follows the [aprsc iGate implementation guidance](https://github.com/hessu/aprsc/blob/main/doc/IGATE-HINTS.md): RF payload bytes and trailing spaces are preserved through the first CR/LF, RX duplicate suppression is removed, DNS is resolved per reconnect, and disconnected or stale RF packets are discarded. Internet-to-RF gating is not implemented.
+
+Local TCP-server tests cover simultaneous receive, position, weather and message sends on one socket; exact verified/unverified login responses; independent feed/iGate controls; sequential login changes for different SSIDs; connection failures and expired sends; and suppression of offline, old-session and stale RF packets. They also verify that gated packets keep their original TOCALL and binary payload, including repeated packets. Existing parser, GPS, TNC, weather, history-facing and update checks remain part of `npm run check`.
+
+The accompanying code review corrected two additional transmission bugs: regular message sends now block update installation while active, and queued TNC requests are cancelled before writing if expired or disconnected. The Beacon menu now starts the selected fixed/mobile mode, and the last started mode is restored after restart.
+
+Before publishing the draft, check on Windows with the radio connected:
+
+1. Retain the existing station and iGate SSIDs. Connect the internet feed and TNC, then enable the iGate. Verify feed reception and increasing iGate upload counts.
+2. Send an APRS-IS position, a message and a current weather observation. Check the configured source callsigns and `APOBCN` destination in independently received packets.
+3. Stop and restart the feed and iGate separately. Check that the other requested operation continues and that login changes reconnect cleanly.
+4. Disconnect and restore the internet. Verify reconnection and that old RF packets are not replayed. Restart OpenBeacon and check saved RF routes and fixed/mobile mode before starting schedules.
+5. Verify an RF position/message exchange and an upgrade from the previous release. Automated local-server tests do not establish live-server acceptance or on-air delivery.
 
 ## Reported operating results
 
@@ -16,7 +32,7 @@ OpenBeacon 0.2.3 is a stable release in use by the owner and other operators, wh
 - The Linux x86-64 AppImage bundles a modified Dire Wolf with optional transmit and PTT configuration; those transmit options need additional hardware validation. Windows can use an external Dire Wolf through TCP KISS; the Windows external-modem integration needs physical verification. macOS and native ARM release artifacts are not published.
 - Linux in-app update on a slow connection failed while reading the download. The later updater allows a longer download timeout and reports progress, but the new Linux upgrade path still needs a real update test. Windows installers are not Authenticode-signed and may trigger SmartScreen.
 - GPS phone integrations, Peet Bros weather hardware, live Weather Underground operation and mobile SmartBeaconing need more physical testing. Credentials are stored locally, not in an OS credential vault; APRS-IS and APRS messages are not private.
-- BBS access, objects/items and automatic message retries are not implemented. The OpenBeacon TOCALL remains pending. See [third-party notices](THIRD-PARTY-NOTICES.md) for map, symbol and dependency terms, including mixed or unknown original APRS symbol provenance.
+- BBS access, objects/items and automatic message retries are not implemented. OpenBeacon has been assigned TOCALL `APOBCN`. See [third-party notices](THIRD-PARTY-NOTICES.md) for map, symbol and dependency terms, including mixed or unknown original APRS symbol provenance.
 
 ## Verification and future testing
 

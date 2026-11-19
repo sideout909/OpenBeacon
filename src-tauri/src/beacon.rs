@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpStream, ToSocketAddrs};
-use std::time::Duration;
+use std::io::Write;
 use tauri::Manager;
 
 pub(crate) fn position(lat: f64, lon: f64, symbol: &str) -> Result<String, String> {
@@ -77,58 +75,19 @@ pub(crate) fn position_payload(
         comment
     ))
 }
-pub(crate) fn transmit(call: &str, passcode: &str, payload: &str) -> Result<String, String> {
-    let address = ("rotate.aprs2.net", 14580)
-        .to_socket_addrs()
-        .map_err(|e| e.to_string())?
-        .next()
-        .ok_or("Server could not be resolved")?;
-    let stream =
-        TcpStream::connect_timeout(&address, Duration::from_secs(8)).map_err(|e| e.to_string())?;
-    exchange(stream, call, passcode, payload)
-}
-fn exchange(
-    mut stream: TcpStream,
+pub(crate) fn transmit(
+    app: &tauri::AppHandle,
     call: &str,
     passcode: &str,
     payload: &str,
 ) -> Result<String, String> {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(8)))
-        .map_err(|e| e.to_string())?;
-    stream
-        .set_write_timeout(Some(Duration::from_secs(8)))
-        .map_err(|e| e.to_string())?;
-    write!(
-        stream,
-        "user {call} pass {passcode} vers OpenBeacon 0.1\r\n"
+    crate::aprs_session::client(app)?.send(
+        crate::aprs_session::Credentials {
+            call: call.into(),
+            pass: Some(passcode.into()),
+        },
+        payload.into(),
     )
-    .map_err(|e| e.to_string())?;
-    let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
-    let mut verified = false;
-    for _ in 0..20 {
-        let mut line = String::new();
-        if reader.read_line(&mut line).map_err(|e| e.to_string())? == 0 {
-            break;
-        }
-        let lower = line.to_ascii_lowercase();
-        if lower.starts_with("# logresp ") {
-            let fields: Vec<_> = lower.split_whitespace().collect();
-            verified = fields
-                .get(2)
-                .is_some_and(|v| v.trim_end_matches(',') == call.to_ascii_lowercase())
-                && fields
-                    .get(3)
-                    .is_some_and(|v| v.trim_end_matches(',') == "verified");
-            break;
-        }
-    }
-    if !verified {
-        return Err("APRS-IS did not verify the callsign and passcode; no packet sent.".into());
-    }
-    write!(stream, "{call}>APRS,TCPIP*:{payload}\r\n")
-        .map_err(|e| format!("Send failed; outcome may be unknown: {e}"))?;
-    Ok(format!("{call}>APRS,TCPIP*:{payload}"))
 }
 #[derive(Serialize, Deserialize)]
 struct Passcode {
@@ -141,7 +100,7 @@ fn credential_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String>
     Ok(dir.join("aprs-is-passcode.json"))
 }
 #[tauri::command]
-pub fn save_aprs_passcode(
+pub async fn save_aprs_passcode(
     app: tauri::AppHandle,
     callsign: String,
     passcode: String,
@@ -161,8 +120,8 @@ pub fn save_aprs_passcode(
         return Err("Enter a callsign and a numeric APRS-IS passcode.".into());
     }
     let data = serde_json::to_vec(&Passcode {
-        callsign: base,
-        passcode,
+        callsign: base.clone(),
+        passcode: passcode.clone(),
     })
     .map_err(|e| e.to_string())?;
     let path = credential_path(&app)?;
@@ -180,7 +139,11 @@ pub fn save_aprs_passcode(
         file.set_permissions(std::fs::Permissions::from_mode(0o600))
             .map_err(|e| e.to_string())?;
     }
-    file.write_all(&data).map_err(|e| e.to_string())
+    file.write_all(&data).map_err(|e| e.to_string())?;
+    let client = crate::aprs_session::client(&app)?;
+    tauri::async_runtime::spawn_blocking(move || client.credentials_changed(base, Some(passcode)))
+        .await
+        .map_err(|e| e.to_string())?
 }
 pub(crate) fn load_passcode(app: &tauri::AppHandle, callsign: &str) -> Result<String, String> {
     let data = std::fs::read(credential_path(app)?)
@@ -198,6 +161,12 @@ pub(crate) fn load_passcode(app: &tauri::AppHandle, callsign: &str) -> Result<St
             "The saved passcode belongs to a different callsign. Update it in My Station.".into(),
         );
     }
+    if saved.passcode.is_empty()
+        || saved.passcode.len() > 5
+        || !saved.passcode.bytes().all(|b| b.is_ascii_digit())
+    {
+        return Err("The saved APRS-IS passcode is invalid. Save it again in My Station.".into());
+    }
     Ok(saved.passcode)
 }
 #[tauri::command]
@@ -205,12 +174,25 @@ pub fn aprs_passcode_saved(app: tauri::AppHandle, callsign: String) -> bool {
     load_passcode(&app, &callsign).is_ok()
 }
 #[tauri::command]
-pub fn clear_aprs_passcode(app: tauri::AppHandle) -> Result<(), String> {
-    match std::fs::remove_file(credential_path(&app)?) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e.to_string()),
+pub async fn clear_aprs_passcode(app: tauri::AppHandle) -> Result<(), String> {
+    let path = credential_path(&app)?;
+    let saved = std::fs::read(&path)
+        .ok()
+        .and_then(|data| serde_json::from_slice::<Passcode>(&data).ok());
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.to_string()),
     }
+    if let Some(saved) = saved {
+        let client = crate::aprs_session::client(&app)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            client.credentials_changed(saved.callsign, None)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+    }
+    Ok(())
 }
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -240,47 +222,13 @@ pub async fn send_position_beacon(
         return Err("Enter a valid APRS-IS passcode".into());
     }
     let payload = position_payload(lat, lon, &symbol, &comment, speed_knots, course)?;
-    tauri::async_runtime::spawn_blocking(move || transmit(&call, &passcode, &payload))
+    tauri::async_runtime::spawn_blocking(move || transmit(&app, &call, &passcode, &payload))
         .await
         .map_err(|e| e.to_string())?
 }
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn sends_only_after_verified_login() {
-        use std::net::TcpListener;
-        for verified in [false, true] {
-            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-            let addr = listener.local_addr().unwrap();
-            let server = std::thread::spawn(move || {
-                let (mut stream, _) = listener.accept().unwrap();
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(2)))
-                    .unwrap();
-                let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut login = String::new();
-                reader.read_line(&mut login).unwrap();
-                assert!(login.starts_with("user N0ABC pass 123 "));
-                write!(
-                    stream,
-                    "# logresp N0ABC {}, server test\r\n",
-                    if verified { "verified" } else { "unverified" }
-                )
-                .unwrap();
-                let mut packet = String::new();
-                let _ = reader.read_line(&mut packet);
-                packet
-            });
-            let result = exchange(TcpStream::connect(addr).unwrap(), "N0ABC", "123", "!test");
-            let packet = server.join().unwrap();
-            assert_eq!(result.is_ok(), verified);
-            assert_eq!(!packet.is_empty(), verified);
-            if verified {
-                assert_eq!(packet, "N0ABC>APRS,TCPIP*:!test\r\n");
-            }
-        }
-    }
     #[test]
     fn encodes_position_and_rounds_minutes() {
         assert_eq!(

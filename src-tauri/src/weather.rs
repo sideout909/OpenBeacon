@@ -499,9 +499,11 @@ pub async fn send_weather(
         "rf" => tnc::send_rf_payload(tnc, call, path, body).await,
         "ip" => {
             let pass = beacon::load_passcode(&app, &call)?;
-            tauri::async_runtime::spawn_blocking(move || beacon::transmit(&call, &pass, &body))
-                .await
-                .map_err(|_| "Weather transmission failed.")?
+            tauri::async_runtime::spawn_blocking(move || {
+                beacon::transmit(&app, &call, &pass, &body)
+            })
+            .await
+            .map_err(|_| "Weather transmission failed.")?
         }
         _ => Err("Choose APRS-IS or RF.".into()),
     }

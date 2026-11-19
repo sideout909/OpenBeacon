@@ -25,9 +25,15 @@ The old portable beta does not include the updater; download and install an upda
 3. To receive online traffic, open **APRS-IS**, select a radius, and connect. The radius limits the APRS-IS server feed; it does not filter RF packets. The filter uses the GPS fix at connection time when available, otherwise the manual location. Reconnect to update its center.
 4. To receive over the air, open **TNC**, select your interface and device, and connect. Configure your radio and TNC for the correct frequency and mode separately. Serial interfaces may require operating-system permissions. The bundled Dire Wolf audio receiver is Linux x86-64 only. Windows users can install and configure Dire Wolf separately, start it, then select **TCP KISS TNC** and connect to its configured address (normally `127.0.0.1:8001`). Dire Wolf handles the audio device and, if transmitting, PTT setup. External Dire Wolf and the Windows connection have not yet been verified with OpenBeacon; use a Dire Wolf version containing the relevant security fixes.
 
+### Shared internet connection
+
+The internet feed, iGate and internet sends share one APRS-IS connection. Existing callsign, passcode, route and startup settings are retained. With a saved passcode, the connection requests a verified login; without one, the feed receives only. The APRS-IS dialog shows the login identity and verification status. Sending and RF forwarding wait for a verified response from the server.
+
+When the iGate is enabled, its callsign and SSID are used for the shared login. My Station and weather packets retain their configured source callsigns. Starting or stopping the iGate may briefly reconnect when its SSID differs from My Station. Disconnect in the APRS-IS dialog stops the internet feed; the iGate and requested sends can still use the connection. Starting the TNC does not enable the iGate. Standalone internet sends can establish the same managed session without enabling the map feed.
+
 ### RF to APRS-IS iGate
 
-In **TNC → RF → APRS-IS iGate**, start the gateway to upload eligible live packets received from a KISS TNC to the public APRS-IS network. The iGate uses the station callsign and saved APRS-IS passcode, and can use a different SSID with the same base callsign. Its optional startup checkbox reconnects the gateway when the app opens; the TNC receiver has a separate autoconnect setting. The gateway does not transmit APRS-IS packets over RF or replay saved history. Do not use a TNC configured for PASSALL. Live-network and broader hardware testing are still needed.
+In **TNC → RF → APRS-IS iGate**, start the gateway to upload eligible live packets received from a KISS TNC to the public APRS-IS network. The iGate uses the station callsign and saved APRS-IS passcode, and can use a different SSID with the same base callsign. Its optional startup checkbox reconnects the gateway when the app opens; the TNC receiver has a separate autoconnect setting. The gateway does not transmit APRS-IS packets over RF or replay saved history. It forwards eligible repeated packets without locally suppressing duplicates; packets are dropped if the connection is unavailable or the live queue becomes stale. Do not use a TNC configured for PASSALL. Live-network and broader hardware testing are still needed.
 
 ### Soundcard transmission and PTT (Linux bundled Dire Wolf)
 
@@ -65,7 +71,7 @@ Open **Messages** to read APRS messages addressed to your configured station. Se
 
 ## Weather
 
-The header’s **Start all beacons** starts previously saved position and weather schedules using their current settings. Start each schedule once from its settings to include it. **Stop all beacons** stops both schedules; a send already in progress may still complete. The currently selected position mode is used, and normal location, GPS, passcode and source checks still apply.
+The header’s **Start all beacons** starts previously saved position and weather schedules using their current settings. Start each schedule once from its settings to include it. **Stop all beacons** stops both schedules; a send already in progress may still complete. The last started position mode is remembered after restart, and normal location, GPS, passcode and source checks still apply.
 
 Open **Weather** for the local NWS forecast and received weather stations. The forecast and personal weather sections can be collapsed, and their state is remembered. A forecast uses a current GPS fix or manual location and requires internet access within NWS coverage. The Stations, Weather and Traffic Monitor source controls offer all, RF, and direct RF views; direct RF relies on the TNC's reported digipeater-used markers.
 

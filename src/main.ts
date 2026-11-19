@@ -850,6 +850,7 @@ function startApp() {
     item.detail = undefined;
     saveOutbox();
     renderMessages();
+    messageTransmissions++;
     try {
       const packet = await desktop.sendAprsMessage(
         item.from,
@@ -867,6 +868,8 @@ function startApp() {
         item.state = "error";
         item.detail = String(error);
       }
+    } finally {
+      messageTransmissions--;
     }
     saveOutbox();
     renderMessages();
@@ -2920,6 +2923,7 @@ function startApp() {
         beaconRouteLabel() === "RF" ? "rf" : "ip",
       );
       localStorage.setItem("openbeacon-beacon-interval", intervalInput.value);
+      localStorage.setItem("openbeacon-beacon-mode", "fixed");
       beaconScheduleActive = true;
       updateBeaconMode();
       void scheduledBeacon(generation);
@@ -2996,7 +3000,7 @@ function startApp() {
       updateBeaconMode();
     }
   }
-  el("mobile-start").onclick = async () => {
+  async function startMobileBeacon() {
     if (updateApplying) {
       el("mobile-beacon-state").textContent = "An update is being installed.";
       return;
@@ -3029,6 +3033,7 @@ function startApp() {
         "openbeacon-beacon-route",
         beaconRouteLabel() === "RF" ? "rf" : "ip",
       );
+      localStorage.setItem("openbeacon-beacon-mode", "mobile");
       beaconScheduleActive = true;
       mobileActive = true;
       lastMobileTime = 0;
@@ -3037,7 +3042,8 @@ function startApp() {
     } catch (error) {
       el("mobile-beacon-state").textContent = String(error);
     }
-  };
+  }
+  el("mobile-start").onclick = () => void startMobileBeacon();
   el("mobile-stop").onclick = () =>
     stopBeaconSchedule(
       beaconSending
@@ -3091,11 +3097,12 @@ function startApp() {
     )
       void sendMobileFix(beaconScheduleGeneration, fix);
   }, 1000);
-  el("beacon-start").onclick = () => {
+  async function startSelectedBeacon() {
     if (el<HTMLSelectElement>("beacon-mode").value === "mobile")
-      el<HTMLButtonElement>("mobile-start").click();
-    else void startAutoBeacon();
-  };
+      await startMobileBeacon();
+    else await startAutoBeacon();
+  }
+  el("beacon-start").onclick = () => void startSelectedBeacon();
   el("beacon-stop").onclick = () =>
     stopBeaconSchedule(
       beaconSending
@@ -3170,7 +3177,7 @@ function startApp() {
       stopBeaconSchedule();
       return;
     }
-    await startAutoBeacon();
+    await startSelectedBeacon();
     if (!beaconScheduleActive) openBeaconSettings();
   };
   el("weather-beacon-quick").onclick = () => {
@@ -3315,6 +3322,14 @@ function startApp() {
       updateBeaconMode();
     };
   }
+  const storedMode = localStorage.getItem("openbeacon-beacon-mode");
+  el<HTMLSelectElement>("beacon-mode").value =
+    storedMode === "mobile" ||
+    (storedMode === null &&
+      localStorage.getItem("openbeacon-smart-settings") !== null &&
+      localStorage.getItem("openbeacon-beacon-interval") === null)
+      ? "mobile"
+      : "fixed";
   const beaconRoute = el<HTMLSelectElement>("beacon-route");
   const storedRoute = localStorage.getItem("openbeacon-beacon-route");
   if (storedRoute === "rf" || storedRoute === "ip")
@@ -3651,7 +3666,18 @@ function startApp() {
   let wanted = false,
     generation = 0;
   function status(state: string, message: string) {
-    el("connection-status").textContent = message;
+    el("connection-status").textContent =
+      state === "connected"
+        ? "Connected"
+        : state === "connecting"
+          ? "Connecting…"
+          : state === "reconnecting"
+            ? "Reconnecting…"
+            : state === "error"
+              ? "Error"
+              : "Disconnected";
+    el("connection").title = message;
+    el("aprs-session-status").textContent = message;
     el("connection-dot").className =
       state === "connected"
         ? "green"

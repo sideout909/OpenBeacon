@@ -23,13 +23,21 @@ struct TxRequest {
     path: String,
     payload: String,
     result: mpsc::SyncSender<Result<(), String>>,
+    deadline: Instant,
 }
 fn process_tx(
     stream: &mut (impl Read + Write),
     rx: &mpsc::Receiver<TxRequest>,
     native: bool,
+    active: impl Fn() -> bool,
 ) -> bool {
     while let Ok(request) = rx.try_recv() {
+        if !active() || Instant::now() >= request.deadline {
+            let _ = request.result.send(Err(
+                "TNC send cancelled or expired before writing; no packet sent.".into(),
+            ));
+            continue;
+        }
         let result = if native {
             kenwood_send(stream, &request.call, &request.path, &request.payload)
         } else {
@@ -118,9 +126,9 @@ fn kenwood_send(
     )?;
     let old_path = tnc_setting(&tnc_command(stream, "UNPROTO")?, "UNPROTO")?;
     let target = if path.is_empty() {
-        "APRS".to_string()
+        crate::TOCALL.to_string()
     } else {
-        format!("APRS VIA {path}")
+        format!("{} VIA {path}", crate::TOCALL)
     };
     let mut may_be_queued = false;
     let operation = (|| -> Result<(), String> {
@@ -286,6 +294,7 @@ pub fn connect_tnc(
                         break;
                     }
                     let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
+                    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
                     report(
                         &app,
                         generation,
@@ -308,10 +317,9 @@ pub fn connect_tnc(
                     let mut decoder = KissDecoder::default();
                     let mut buf = [0; 4096];
                     while active(&token, generation) {
-                        if tx
-                            .as_ref()
-                            .is_some_and(|rx| !process_tx(&mut stream, rx, false))
-                        {
+                        if tx.as_ref().is_some_and(|rx| {
+                            !process_tx(&mut stream, rx, false, || active(&token, generation))
+                        }) {
                             break;
                         }
                         match stream.read(&mut buf) {
@@ -766,10 +774,11 @@ pub fn connect_serial_tnc(
                     let mut monitor = MonitorDecoder::default();
                     let mut buf = [0u8; 4096];
                     while active(&token, generation) {
-                        if tx
-                            .as_ref()
-                            .is_some_and(|rx| !process_tx(&mut stream, rx, mode == "ts2000"))
-                        {
+                        if tx.as_ref().is_some_and(|rx| {
+                            !process_tx(&mut stream, rx, mode == "ts2000", || {
+                                active(&token, generation)
+                            })
+                        }) {
                             break;
                         }
                         match stream.read(&mut buf) {
@@ -894,7 +903,7 @@ fn rf_frame(call: &str, path: &str, payload: &str) -> Result<Vec<u8>, String> {
     if source.len() != 1 || source[0] != call || call.split('-').next().unwrap_or("").len() < 3 {
         return Err("Invalid station callsign".into());
     }
-    let mut addresses = vec!["APRS".to_string(), call.to_string()];
+    let mut addresses = vec![crate::TOCALL.to_string(), call.to_string()];
     addresses.extend(parse_path(path)?);
     let mut frame = Vec::new();
     let last = addresses.len() - 1;
@@ -946,6 +955,7 @@ pub(crate) async fn send_rf_payload(
             path: path.clone(),
             payload: payload.clone(),
             result: reply,
+            deadline: Instant::now() + Duration::from_secs(40),
         })
         .map_err(|_| "TNC disconnected before sending")?;
     }
@@ -957,7 +967,8 @@ pub(crate) async fn send_rf_payload(
     .await
     .map_err(|e| e.to_string())??;
     Ok(format!(
-        "{callsign}>APRS{}:{payload}",
+        "{callsign}>{}{}:{payload}",
+        crate::TOCALL,
         if path.is_empty() {
             String::new()
         } else {
@@ -1249,6 +1260,47 @@ pub fn list_playback_devices() -> Result<Vec<CaptureDevice>, String> {
 #[cfg(test)]
 mod capture_tests {
     #[test]
+    fn queued_transmissions_expire_and_disconnect_cancels_remaining_frames() {
+        use super::*;
+        use std::io::Cursor;
+        let (tx, rx) = mpsc::channel();
+        let mut replies = Vec::new();
+        for (bytes, deadline) in [
+            (b"expired".to_vec(), Instant::now() - Duration::from_secs(1)),
+            (
+                b"current".to_vec(),
+                Instant::now() + Duration::from_secs(40),
+            ),
+            (
+                b"cancelled".to_vec(),
+                Instant::now() + Duration::from_secs(40),
+            ),
+        ] {
+            let (result, reply) = mpsc::sync_channel(1);
+            tx.send(TxRequest {
+                kiss: bytes,
+                call: "N0ABC".into(),
+                path: String::new(),
+                payload: String::new(),
+                result,
+                deadline,
+            })
+            .unwrap();
+            replies.push(reply);
+        }
+        let mut stream = Cursor::new(Vec::<u8>::new());
+        let checks = std::cell::Cell::new(0);
+        assert!(process_tx(&mut stream, &rx, false, || {
+            let n = checks.get();
+            checks.set(n + 1);
+            n < 2 // Disconnect after the first non-expired request is written.
+        }));
+        assert_eq!(stream.into_inner(), b"current");
+        assert!(replies[0].recv().unwrap().is_err());
+        assert!(replies[1].recv().unwrap().is_ok());
+        assert!(replies[2].recv().unwrap().is_err());
+    }
+    #[test]
     fn ts2000_beacon_keeps_transmit_identity_while_packet_may_be_queued() {
         use std::io::{Read, Write};
         struct Sim {
@@ -1317,7 +1369,7 @@ mod capture_tests {
         super::kenwood_send(&mut sim, "K8OTY", "WIDE1-1", "!test").unwrap();
         assert_eq!(sim.sent, ["!test"]);
         assert_eq!(sim.call, "K8OTY");
-        assert_eq!(sim.path, "APRS VIA WIDE1-1");
+        assert_eq!(sim.path, "APOBCN VIA WIDE1-1");
         assert!(!sim.converse);
     }
     #[test]
@@ -1452,7 +1504,7 @@ mod capture_tests {
             .unwrap();
         let (ax, packet) = openbeacon_packet::aprs::decode_rf_frame(&frame.bytes, false).unwrap();
         assert_eq!(ax.source, "K8OTY");
-        assert_eq!(ax.destination, "APRS");
+        assert_eq!(ax.destination, "APOBCN");
         assert_eq!(packet.path, ["WIDE1-1", "WIDE2-1"]);
         assert_eq!(packet.position.unwrap().comment, "OpenBeacon Test");
         assert!(super::rf_frame("K8OTY", "WIDE1-16", "!test").is_err());

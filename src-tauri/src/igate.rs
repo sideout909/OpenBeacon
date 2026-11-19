@@ -1,26 +1,8 @@
 //! Opt-in, one-way RF to APRS-IS gateway. Never consumes history or internet packets.
 use openbeacon_packet::aprs::{DecodedPacket, PacketOrigin};
 use serde::Serialize;
-use std::{
-    collections::HashMap,
-    io::{BufRead, BufReader, Read, Write},
-    net::{TcpStream, ToSocketAddrs},
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        mpsc::{self, SyncSender},
-        Arc, Mutex,
-    },
-    time::{Duration, Instant},
-};
-use tauri::{Emitter, Manager, State};
+use tauri::{Emitter, Manager};
 
-type PacketSender = Mutex<Option<(u64, SyncSender<DecodedPacket>)>>;
-
-#[derive(Default)]
-pub struct Igate {
-    generation: Arc<AtomicU64>,
-    sender: Arc<PacketSender>,
-}
 #[derive(Clone, Serialize)]
 struct Status {
     generation: u64,
@@ -29,7 +11,7 @@ struct Status {
     forwarded: u64,
     skipped: u64,
 }
-fn report(
+pub(crate) fn report(
     app: &tauri::AppHandle,
     generation: u64,
     state: &'static str,
@@ -63,7 +45,7 @@ fn valid_call(call: &str) -> bool {
         })
         && parts.next().is_none()
 }
-fn format_packet(packet: &DecodedPacket, call: &str) -> Option<(Vec<u8>, Vec<u8>)> {
+pub(crate) fn format_packet(packet: &DecodedPacket, call: &str) -> Option<Vec<u8>> {
     if packet.origin != PacketOrigin::Rf {
         return None;
     }
@@ -84,6 +66,11 @@ fn format_packet(packet: &DecodedPacket, call: &str) -> Option<(Vec<u8>, Vec<u8>
         return None;
     }
     fn parse(raw: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
+        let end = raw
+            .iter()
+            .position(|&b| b == b'\r' || b == b'\n')
+            .unwrap_or(raw.len());
+        let raw = &raw[..end];
         let colon = raw.iter().position(|&b| b == b':')?;
         let header = &raw[..colon];
         let body = raw.get(colon + 1..)?;
@@ -92,7 +79,6 @@ fn format_packet(packet: &DecodedPacket, call: &str) -> Option<(Vec<u8>, Vec<u8>
             || gt + 1 == header.len()
             || body.is_empty()
             || !header.iter().all(|b| (33..=126).contains(b))
-            || body.iter().any(|b| *b == 0 || *b == b'\r' || *b == b'\n')
         {
             return None;
         }
@@ -126,231 +112,37 @@ fn format_packet(packet: &DecodedPacket, call: &str) -> Option<(Vec<u8>, Vec<u8>
     if header[..gt].eq_ignore_ascii_case(call.as_bytes()) {
         return None;
     }
-    let dest_end = header[gt + 1..]
-        .iter()
-        .position(|&b| b == b',')
-        .map(|n| gt + 1 + n)
-        .unwrap_or(header.len());
-    let mut key = header[..dest_end].to_ascii_uppercase();
-    key.push(b':');
-    key.extend_from_slice(body);
     let mut line = header.to_vec();
     line.extend_from_slice(format!(",qAO,{call}:").as_bytes());
     line.extend_from_slice(body);
     line.extend_from_slice(b"\r\n");
-    (line.len() <= 512).then_some((key, line))
+    (line.len() <= 512).then_some(line)
 }
 pub fn offer(app: &tauri::AppHandle, packets: &[DecodedPacket]) {
-    let state = app.state::<Igate>();
-    if let Ok(guard) = state.sender.lock() {
-        if let Some((_, sender)) = guard.as_ref() {
-            for packet in packets {
-                let _ = sender.try_send(packet.clone());
-            }
-        }
-    };
-}
-fn clear_sender(sender: &PacketSender, generation: u64) {
-    if let Ok(mut guard) = sender.lock() {
-        if guard.as_ref().is_some_and(|v| v.0 == generation) {
-            *guard = None;
-        }
+    if let Ok(client) = app.state::<crate::aprs_session::AprsSession>().client(app) {
+        client.offer(packets);
     }
-}
-fn authenticate(mut stream: TcpStream, call: &str, pass: &str) -> Result<TcpStream, String> {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(8)))
-        .map_err(|e| e.to_string())?;
-    stream
-        .set_write_timeout(Some(Duration::from_secs(8)))
-        .map_err(|e| e.to_string())?;
-    write!(
-        stream,
-        "user {call} pass {pass} vers OpenBeacon {}\r\n",
-        env!("CARGO_PKG_VERSION")
-    )
-    .map_err(|e| e.to_string())?;
-    let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
-    for _ in 0..20 {
-        let mut line = String::new();
-        if reader
-            .by_ref()
-            .take(1024)
-            .read_line(&mut line)
-            .map_err(|e| e.to_string())?
-            == 0
-        {
-            break;
-        }
-        let fields: Vec<_> = line.split_whitespace().collect();
-        if fields.first() == Some(&"#") && fields.get(1) == Some(&"logresp") {
-            if fields.get(2).is_some_and(|v| v.eq_ignore_ascii_case(call))
-                && fields
-                    .get(3)
-                    .is_some_and(|v| v.trim_end_matches(',').eq_ignore_ascii_case("verified"))
-            {
-                return Ok(stream);
-            }
-            return Err("APRS-IS did not verify your callsign and passcode.".into());
-        }
-    }
-    Err("APRS-IS did not verify the login.".into())
 }
 #[tauri::command]
-pub fn start_igate(
-    app: tauri::AppHandle,
-    state: State<'_, Igate>,
-    callsign: String,
-) -> Result<u64, String> {
+pub async fn start_igate(app: tauri::AppHandle, callsign: String) -> Result<u64, String> {
     let call = callsign.trim().to_ascii_uppercase();
     if !valid_call(&call) {
         return Err("Enter a valid iGate callsign and optional SSID.".into());
     }
-    let pass = crate::beacon::load_passcode(&app, &call)?;
-    let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
-    if let Ok(mut guard) = state.sender.lock() {
-        *guard = None;
-    }
-    let token = state.generation.clone();
-    let sender = state.sender.clone();
-    std::thread::spawn(move || {
-        let mut forwarded = 0;
-        let mut skipped = 0;
-        let mut seen = HashMap::<Vec<u8>, Instant>::new();
-        while token.load(Ordering::SeqCst) == generation {
-            report(
-                &app,
-                generation,
-                "connecting",
-                "Connecting to APRS-IS…",
-                forwarded,
-                skipped,
-            );
-            let connected = (|| -> Result<TcpStream, String> {
-                let address = ("rotate.aprs2.net", 14580)
-                    .to_socket_addrs()
-                    .map_err(|e| e.to_string())?
-                    .next()
-                    .ok_or("Could not resolve APRS-IS")?;
-                let stream = TcpStream::connect_timeout(&address, Duration::from_secs(8))
-                    .map_err(|e| e.to_string())?;
-                authenticate(stream, &call, &pass)
-            })();
-            if token.load(Ordering::SeqCst) != generation {
-                break;
-            }
-            match connected {
-                Ok(mut stream) => {
-                    let _ = stream.set_read_timeout(Some(Duration::from_millis(100)));
-                    let (tx, rx) = mpsc::sync_channel(128);
-                    if let Ok(mut guard) = sender.lock() {
-                        if token.load(Ordering::SeqCst) == generation {
-                            *guard = Some((generation, tx));
-                        }
-                    }
-                    report(
-                        &app,
-                        generation,
-                        "connected",
-                        "Verified · forwarding eligible live RF packets",
-                        forwarded,
-                        skipped,
-                    );
-                    loop {
-                        if token.load(Ordering::SeqCst) != generation {
-                            break;
-                        }
-                        match rx.recv_timeout(Duration::from_millis(100)) {
-                            Ok(packet) => {
-                                let Some((key, line)) = format_packet(&packet, &call) else {
-                                    skipped += 1;
-                                    continue;
-                                };
-                                let now = Instant::now();
-                                seen.retain(|_, t| {
-                                    now.duration_since(*t) < Duration::from_secs(30)
-                                });
-                                if seen.contains_key(&key) {
-                                    skipped += 1;
-                                    continue;
-                                }
-                                if seen.len() >= 2048 {
-                                    seen.clear();
-                                }
-                                if token.load(Ordering::SeqCst) != generation
-                                    || stream.write_all(&line).is_err()
-                                {
-                                    break;
-                                }
-                                seen.insert(key, now);
-                                forwarded += 1;
-                                report(
-                                    &app,
-                                    generation,
-                                    "connected",
-                                    "Verified · forwarding eligible live RF packets",
-                                    forwarded,
-                                    skipped,
-                                );
-                            }
-                            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                            Err(mpsc::RecvTimeoutError::Timeout) => {}
-                        }
-                        let mut buf = [0; 2048];
-                        match stream.read(&mut buf) {
-                            Ok(0) => break,
-                            Ok(_) => {}
-                            Err(e)
-                                if matches!(
-                                    e.kind(),
-                                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                                ) => {}
-                            Err(_) => break,
-                        }
-                    }
-                    clear_sender(&sender, generation);
-                    if token.load(Ordering::SeqCst) == generation {
-                        report(
-                            &app,
-                            generation,
-                            "reconnecting",
-                            "APRS-IS disconnected; reconnecting. RF packets are not queued.",
-                            forwarded,
-                            skipped,
-                        );
-                    }
-                }
-                Err(e) => {
-                    report(
-                        &app,
-                        generation,
-                        "reconnecting",
-                        &format!("{e} Retrying; RF packets are not queued."),
-                        forwarded,
-                        skipped,
-                    );
-                }
-            }
-            for _ in 0..50 {
-                if token.load(Ordering::SeqCst) != generation {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            }
-        }
-        clear_sender(&sender, generation);
-    });
-    Ok(generation)
+    let pass = Some(crate::beacon::load_passcode(&app, &call)?);
+    let client = crate::aprs_session::client(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        client.igate(Some(crate::aprs_session::Credentials { call, pass }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-pub fn stop_igate(state: State<'_, Igate>) {
-    state.generation.fetch_add(1, Ordering::SeqCst);
-    if let Ok(mut sender) = state.sender.lock() {
-        *sender = None;
-    }
-}
-pub fn shutdown(app: &tauri::AppHandle) {
-    stop_igate(app.state::<Igate>());
+pub async fn stop_igate(app: tauri::AppHandle) -> Result<(), String> {
+    let client = crate::aprs_session::client(&app)?;
+    tauri::async_runtime::spawn_blocking(move || client.igate(None).map(|_| ()))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
@@ -365,42 +157,20 @@ mod tests {
         packet
     }
     #[test]
-    fn login_requires_verified_server_response() {
-        use std::net::TcpListener;
-        for verified in [false, true] {
-            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-            let address = listener.local_addr().unwrap();
-            let server = std::thread::spawn(move || {
-                let (mut stream, _) = listener.accept().unwrap();
-                let mut line = String::new();
-                BufReader::new(stream.try_clone().unwrap())
-                    .read_line(&mut line)
-                    .unwrap();
-                assert!(line.starts_with("user N0ABC pass 12345 "));
-                write!(
-                    stream,
-                    "# logresp N0ABC {}, server test\r\n",
-                    if verified { "verified" } else { "unverified" }
-                )
-                .unwrap();
-            });
-            assert_eq!(
-                authenticate(TcpStream::connect(address).unwrap(), "N0ABC", "12345").is_ok(),
-                verified
-            );
-            server.join().unwrap();
-        }
-    }
-    #[test]
     fn forwards_rf_and_preserves_binary_and_path() {
-        let (key, line) = format_packet(&rf(b"K8ABC>APRS,WIDE1-1*:!\xff"), "N0ABC-10").unwrap();
-        assert_eq!(line, b"K8ABC>APRS,WIDE1-1*,qAO,N0ABC-10:!\xff\r\n");
-        assert_eq!(key, b"K8ABC>APRS:!\xff");
+        let line = format_packet(&rf(b"K8ABC>APRS,WIDE1-1*:!\xff\x00 x  "), "N0ABC-10").unwrap();
+        assert_eq!(line, b"K8ABC>APRS,WIDE1-1*,qAO,N0ABC-10:!\xff\x00 x  \r\n");
         assert_eq!(
-            key,
-            format_packet(&rf(b"K8ABC>APRS,WIDE2-2:!\xff"), "N0ABC-10")
-                .unwrap()
-                .0
+            format_packet(&rf(b"K8ABC>APRS:abc\rignored"), "N0ABC-10").unwrap(),
+            b"K8ABC>APRS,qAO,N0ABC-10:abc\r\n"
+        );
+        assert_eq!(
+            format_packet(&rf(b"K8ABC>APRS:abc\nignored"), "N0ABC-10").unwrap(),
+            b"K8ABC>APRS,qAO,N0ABC-10:abc\r\n"
+        );
+        assert_eq!(
+            format_packet(&rf(b"K8ABC>APRS:repeat"), "N0ABC-10"),
+            format_packet(&rf(b"K8ABC>APRS:repeat"), "N0ABC-10")
         );
     }
     #[test]
@@ -429,7 +199,7 @@ mod tests {
     }
     #[test]
     fn unwraps_third_party_and_checks_length() {
-        let (_, line) = format_packet(
+        let line = format_packet(
             &rf(b"K8ABC>APRS,WIDE1-1:}K9ABC>APRS,WIDE2-1*:hello"),
             "N0ABC",
         )

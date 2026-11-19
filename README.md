@@ -11,7 +11,7 @@ OpenBeacon is a stable, map-first desktop APRS application for Windows and Linux
 - **Traffic Monitor:** Search, filter, pause and inspect recent received packets. Local SQLite history retains up to 10,000 packets, including original bytes and available RF interface information, and restores recent views on restart.
 - **Messages and weather:** Send and receive APRS messages over APRS-IS or supported RF TNCs, track acknowledgements and resend messages; view received weather packets; fetch a National Weather Service forecast for your configured location when online and within its coverage area. Weather Underground PWS observations and Peet Bros Ultimeter serial readings can be reviewed and manually sent as APRS weather over APRS-IS or a supported RF TNC. BBS access is not implemented.
 - **Beaconing:** Send a position once or schedule fixed-position APRS-IS beacons while the app runs. An APRS-IS passcode is saved in My Station. Fixed-position RF beacons can be sent through serial or TCP KISS or a TS-2000 in Kenwood text mode; mobile SmartBeaconing is implemented but needs hardware validation. Bundled Dire Wolf transmission is configurable on Linux; other Kenwood text-mode transmission is not available.
-- **Device identification:** Packet and station details show known TOCALL device/application names from a bundled offline snapshot of the [APRS device ID database](https://github.com/aprsorg/aprs-deviceid). Mic-E device identification is not yet implemented. An OpenBeacon TOCALL [has been requested](https://github.com/aprsorg/aprs-deviceid/issues/397); the app currently uses the generic `APRS` destination.
+- **Device identification:** Packet and station details show known TOCALL device/application names from a bundled offline snapshot of the [APRS device ID database](https://github.com/aprsorg/aprs-deviceid). Mic-E device identification is not yet implemented. OpenBeacon uses its assigned TOCALL, [`APOBCN`](https://github.com/aprsorg/aprs-deviceid/issues/397), for packets it originates.
 
 The decoder supports uncompressed, compressed and non-ambiguous Mic-E positions, plus basic message, status and weather fields. Uncompressed ambiguous positions are plotted approximately; ambiguous Mic-E positions are not plotted. Unsupported or malformed packets retain their raw data and warnings. Objects and items, automatic message retries, and BBS retrieval are still planned. Automatic acknowledgements are opt-in and active only while the app runs.
 
@@ -55,6 +55,10 @@ The release artifacts are a Windows x86-64 NSIS installer and a Linux x86-64 App
 ## Software updates
 
 Updater-enabled Windows installers and Linux AppImages check GitHub for signed releases at startup. Open **Settings → Software updates** to check manually or install an available update. Stable and beta releases currently share one update channel. Automatic schedules and active sends or map downloads must be stopped before installation. Previous portable beta archives require a one-time manual installation of an updater-enabled release. Update packaging and verification instructions for maintainers are in [UPDATE_RELEASES.md](UPDATE_RELEASES.md).
+
+## Shared APRS-IS connection
+
+Internet reception, iGate uploads, position and weather beacons, and messages use one managed APRS-IS connection. A saved passcode enables verified sending; reception remains available without a passcode. The TNC, internet feed and iGate have independent controls. The iGate uses its configured callsign and SSID for the shared login while enabled; other packets retain their configured source callsigns, including weather's `-13`. My Station and the iGate must use the same base callsign. Login changes close the previous socket before reconnecting. RF packets received while disconnected are discarded.
 
 ## GPS sources
 

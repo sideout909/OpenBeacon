@@ -1,4 +1,4 @@
-import registry from "./data/aprs-deviceid.json";
+import registry from "./data/aprs-deviceid.json" with { type: "json" };
 
 // Exact allocations take precedence; then prefer the most specific pattern.
 const allocations = Object.entries(registry.tocalls)

@@ -1,5 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+const TOCALL: &str = "APOBCN";
+
+mod aprs_login;
+mod aprs_session;
 mod beacon;
 mod gps;
 mod history;
@@ -9,25 +13,11 @@ mod messaging;
 mod tnc;
 mod weather;
 
-use openbeacon_packet::{
-    aprs::{decode_tnc2, DecodedPacket, PacketOrigin},
-    tnc2::{Line, LineDecoder},
-};
+use openbeacon_packet::aprs::{DecodedPacket, PacketOrigin};
 use serde::{Deserialize, Serialize};
-use std::{
-    io::{Read, Write},
-    net::{TcpStream, ToSocketAddrs},
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
-use tauri::{Emitter, Manager, State};
+use tauri::{Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
 
-#[derive(Default)]
-struct Connection(Arc<AtomicU64>);
 #[derive(Clone, Serialize)]
 struct Status {
     origin: PacketOrigin,
@@ -57,21 +47,9 @@ fn emit_status(app: &tauri::AppHandle, generation: u64, state: &str, message: &s
         },
     );
 }
-fn active(token: &AtomicU64, generation: u64) -> bool {
-    token.load(Ordering::SeqCst) == generation
-}
-fn delay(token: &AtomicU64, generation: u64, seconds: u64) {
-    for _ in 0..seconds * 4 {
-        if !active(token, generation) {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    }
-}
 #[tauri::command]
-fn connect_aprs(
+async fn connect_aprs(
     app: tauri::AppHandle,
-    state: State<'_, Connection>,
     callsign: String,
     lat: f64,
     lon: f64,
@@ -99,110 +77,20 @@ fn connect_aprs(
     {
         return Err("Enter valid coordinates and a radius between 1 and 2000 km.".into());
     }
-    let generation = state.0.fetch_add(1, Ordering::SeqCst) + 1;
-    let token = state.0.clone();
-    std::thread::spawn(move || {
-        let mut retry = 1;
-        while active(&token, generation) {
-            emit_status(&app, generation, "connecting", "Connecting to APRS-IS…");
-            let address = ("rotate.aprs2.net", 14580)
-                .to_socket_addrs()
-                .ok()
-                .and_then(|mut a| a.next());
-            let result = address
-                .ok_or_else(|| "Could not resolve the APRS-IS server".to_string())
-                .and_then(|a| {
-                    TcpStream::connect_timeout(&a, Duration::from_secs(8))
-                        .map_err(|e| e.to_string())
-                });
-            match result {
-                Ok(mut stream) => {
-                    if !active(&token, generation) {
-                        break;
-                    }
-                    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
-                    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
-                    let login = format!("user {call} pass -1 vers OpenBeacon 0.1 filter r/{lat:.5}/{lon:.5}/{radius} g/{call}\r\n");
-                    if stream.write_all(login.as_bytes()).is_err() {
-                        emit_status(
-                            &app,
-                            generation,
-                            "error",
-                            "Unable to send the receive-only login",
-                        );
-                    } else {
-                        emit_status(&app, generation, "connecting", "Waiting for server login…");
-                        retry = 1;
-                        let mut buf = [0u8; 8192];
-                        let mut framing = LineDecoder::default();
-                        let mut batch = Vec::new();
-                        while active(&token, generation) {
-                            match stream.read(&mut buf) {
-                                Ok(0) => break,
-                                Ok(n) => {
-                                    for line in framing.feed(&buf[..n]) {
-                                        match line {
-                                            Line::Data(line) if line.starts_with(b"# logresp") => {
-                                                emit_status(
-                                                    &app,
-                                                    generation,
-                                                    "connected",
-                                                    "Connected",
-                                                )
-                                            }
-                                            Line::Data(line) if !line.starts_with(b"#") => {
-                                                let mut packet = decode_tnc2(&line);
-                                                packet.origin = PacketOrigin::AprsIs;
-                                                batch.push(packet)
-                                            }
-                                            _ => {}
-                                        }
-                                    }
-                                }
-                                Err(e)
-                                    if matches!(
-                                        e.kind(),
-                                        std::io::ErrorKind::WouldBlock
-                                            | std::io::ErrorKind::TimedOut
-                                    ) => {}
-                                Err(_) => break,
-                            }
-                            if !batch.is_empty() && active(&token, generation) {
-                                if let Err(error) = history::save(&app, &batch) {
-                                    let _ = app.emit("history-error", error);
-                                }
-                                let _ = app.emit(
-                                    "aprs-packets",
-                                    Packets {
-                                        packets: std::mem::take(&mut batch),
-                                        generation,
-                                    },
-                                );
-                            }
-                        }
-                    }
-                }
-                Err(e) => emit_status(
-                    &app,
-                    generation,
-                    "error",
-                    &format!("Connection failed: {e}"),
-                ),
-            }
-            if active(&token, generation) {
-                emit_status(
-                    &app,
-                    generation,
-                    "reconnecting",
-                    &format!("Reconnecting in {retry}s"),
-                );
-                delay(&token, generation, retry);
-                retry = (retry * 2).min(30);
-            }
-        }
-    });
-    Ok(generation)
+    let pass = beacon::load_passcode(&app, &call).ok();
+    let client = aprs_session::client(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        client.receive(Some(aprs_session::ReceiveConfig {
+            credentials: aprs_session::Credentials { call, pass },
+            lat,
+            lon,
+            radius,
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
+
 #[derive(Clone, Serialize, Deserialize)]
 struct SavedSettings {
     callsign: String,
@@ -299,9 +187,13 @@ fn save_settings(app: tauri::AppHandle, settings: SavedSettings) -> Result<(), S
         .map_err(|e| format!("Could not save settings: {e}"))
 }
 #[tauri::command]
-fn disconnect_aprs(state: State<'_, Connection>) {
-    state.0.fetch_add(1, Ordering::SeqCst);
+async fn disconnect_aprs(app: tauri::AppHandle) -> Result<(), String> {
+    let client = aprs_session::client(&app)?;
+    tauri::async_runtime::spawn_blocking(move || client.receive(None).map(|_| ()))
+        .await
+        .map_err(|e| e.to_string())?
 }
+
 #[tauri::command]
 fn update_install_supported() -> bool {
     #[cfg(target_os = "linux")]
@@ -345,11 +237,10 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            app.manage(Connection::default());
+            app.manage(aprs_session::AprsSession::default());
             app.manage(gps::Gps::default());
             app.manage(weather::WeatherState::default());
             app.manage(tnc::Tnc::default());
-            app.manage(igate::Igate::default());
             app.manage(maps::MapDownload::default());
             app.manage(maps::LocalMap::default());
             app.manage(tnc::Modem::default());
@@ -400,7 +291,7 @@ fn main() {
         .expect("failed to build OpenBeacon")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
-                igate::shutdown(app);
+                app.state::<aprs_session::AprsSession>().shutdown();
                 tnc::shutdown(app);
                 gps::shutdown(app);
             }
