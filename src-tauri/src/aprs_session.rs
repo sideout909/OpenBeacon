@@ -775,15 +775,7 @@ mod tests {
             let until = Instant::now() + Duration::from_secs(3);
             loop {
                 match self.listener.accept() {
-                    Ok((stream, _)) => {
-                        stream
-                            .set_read_timeout(Some(Duration::from_secs(3)))
-                            .unwrap();
-                        stream
-                            .set_write_timeout(Some(Duration::from_secs(3)))
-                            .unwrap();
-                        return Peer(BufReader::new(stream));
-                    }
+                    Ok((stream, _)) => return Peer::new(stream),
                     Err(e)
                         if e.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < until =>
                     {
@@ -811,6 +803,18 @@ mod tests {
     }
     struct Peer(BufReader<TcpStream>);
     impl Peer {
+        fn new(stream: TcpStream) -> Self {
+            // Winsock accept inherits the listener's nonblocking mode. The test
+            // peer uses blocking reads with deadlines on every platform.
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            stream
+                .set_write_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            Self(BufReader::new(stream))
+        }
         fn line(&mut self) -> Vec<u8> {
             let mut line = Vec::new();
             self.0.read_until(b'\n', &mut line).unwrap();
@@ -856,6 +860,22 @@ mod tests {
         let call = call.to_string();
         let payload = payload.to_string();
         std::thread::spawn(move || client.send(credentials(&call, Some("123")), payload))
+    }
+
+    #[test]
+    fn test_peer_waits_for_delayed_data_on_an_initially_nonblocking_socket() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let sender = std::thread::spawn(move || {
+            let mut stream = TcpStream::connect(address).unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+            stream.write_all(b"delayed packet\r\n").unwrap();
+        });
+        let (stream, _) = listener.accept().unwrap();
+        stream.set_nonblocking(true).unwrap();
+        let mut peer = Peer::new(stream);
+        assert_eq!(peer.line(), b"delayed packet\r\n");
+        sender.join().unwrap();
     }
 
     #[test]
