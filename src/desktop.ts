@@ -2,6 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { DecodedPacket, PacketOrigin } from "./aprs";
+import type { ReleaseNotes } from "./release-notes";
 
 export type Theme = "system" | "light" | "dark";
 export type ConnectionSettings = {
@@ -197,6 +198,7 @@ export const desktop = {
   clearAprsPasscode: () => invoke<void>("clear_aprs_passcode"),
   updateInstallSupported: () => invoke<boolean>("update_install_supported"),
   openReleases: () => invoke<void>("open_releases"),
+  releaseNotes: () => invoke<ReleaseNotes | null>("release_notes"),
   openMapProvider: () => invoke<void>("open_map_provider"),
   openPasscodeGenerator: () => invoke<void>("open_passcode_generator"),
   loadHistory: () => invoke<DecodedPacket[]>("load_history"),

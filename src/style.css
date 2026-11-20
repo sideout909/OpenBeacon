@@ -68,3 +68,42 @@ dialog .map-checkbox{display:flex;gap:8px;align-items:center}dialog .map-checkbo
 #tnc-dialog [hidden]{display:none!important}
 
 .start-all-beacons{align-self:center;margin:0 2px;padding:8px 10px;border:1px solid #75aa98;border-radius:6px;background:#e4f4eb;color:#205b45;font-size:11px;font-weight:700;white-space:nowrap}html[data-theme=dark] .start-all-beacons{background:#24483b;border-color:#629e86;color:#d7f5e5}@media(max-width:1100px){.start-all-beacons{margin:0 2px;padding:7px 6px;font-size:10px}}
+
+/* Weather uses one type scale for both source configurations. */
+.weather-panel{font-size:13px;line-height:1.5}
+.weather-panel label{display:block;margin:12px 0;font-size:12px;font-weight:600}
+.weather-panel input,.weather-panel select{display:block;box-sizing:border-box;width:100%;min-width:0;margin-top:6px;padding:9px 10px;border:1px solid var(--border);border-radius:5px;background:var(--bg);color:var(--text);font-size:13px;font-weight:400;line-height:1.4}
+.weather-panel button{font-size:13px;line-height:1.4}
+.weather-panel .message-note,.weather-panel .weather-help,.weather-setup-status,.weather-intro{font-size:12px;line-height:1.55;color:var(--muted)}
+.weather-panel .weather-collapsible>summary{font-size:15px;line-height:1.5;font-weight:700}
+.weather-station-setup .weather-setup-step{padding:16px 0;border-top:1px solid var(--border)}
+.weather-station-setup .weather-setup-step:last-child{padding-bottom:0}
+.weather-station-setup h3{display:flex;align-items:center;gap:8px;margin:0 0 12px;font-size:14px;line-height:1.5}
+.weather-step-number{display:inline-grid;place-items:center;flex:none;width:23px;height:23px;border-radius:50%;background:var(--packet);color:var(--accent);font-size:12px}
+.weather-setting-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.weather-setting-grid>label{min-width:0}
+.weather-station-setup .panel-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:12px 0}
+.weather-station-setup .panel-actions .primary{background:var(--accent);border-color:var(--accent);color:var(--surface);font-weight:600}
+.weather-station-setup .panel-actions .weather-text-button{border:0;padding:8px 0;background:transparent;color:var(--muted);text-decoration:underline;text-underline-offset:3px}
+.weather-help{margin:10px 0}
+.weather-help>summary{cursor:pointer;font-weight:500}
+.weather-help p{margin:8px 0}
+.weather-setup-status{margin:10px 0;overflow-wrap:anywhere}
+.weather-setup-status:empty{display:none}
+.weather-readings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:12px 0 0}
+.weather-reading{padding:10px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg)}
+.weather-reading dt{font-size:11px;color:var(--muted)}
+.weather-reading dd{margin:4px 0 0;font-size:16px;line-height:1.4;font-weight:600;overflow-wrap:anywhere}
+.weather-panel [hidden]{display:none}
+#whats-new-dialog{width:min(600px,calc(100vw - 32px));max-height:calc(100dvh - 32px);overflow-y:auto}
+#whats-new-dialog h2{margin-bottom:4px}
+.release-notes{margin:20px 0;font-size:13px;line-height:1.65;overflow-wrap:anywhere}
+.release-notes h3{margin:20px 0 8px;font-size:15px}
+.release-notes h3:first-child{margin-top:0}
+.release-notes p,.release-notes ul,.release-notes ol{margin:8px 0}
+.release-notes p{color:var(--text)}
+.release-notes ul,.release-notes ol{padding-left:22px}
+.release-notes li{margin:6px 0}
+.release-notes pre{white-space:pre-wrap;background:var(--bg);padding:12px;border-radius:6px;font-size:12px}
+#whats-new-dialog .dialog-actions{flex-wrap:wrap}
+@media(max-width:1100px){.weather-setting-grid{grid-template-columns:minmax(0,1fr);gap:0}}

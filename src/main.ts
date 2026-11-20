@@ -5,6 +5,12 @@ import { updateBlocked, updateDownloadDetails } from "./update-control";
 import { savedBeaconRoute } from "./beacon-routes";
 import { shouldStartSetup } from "./setup-wizard";
 import {
+  bundledReleaseNotes,
+  releaseNotesBlocks,
+  shouldShowWhatsNew,
+  type ReleaseNotes,
+} from "./release-notes";
+import {
   connectionLocation,
   currentPosition,
   fixedPosition,
@@ -56,12 +62,14 @@ function startApp() {
   const el = <T extends HTMLElement = HTMLElement>(id: string): T =>
     document.getElementById(id) as T;
   el<HTMLImageElement>("brand-icon").src = appIcon;
-  void getVersion()
+  const appVersion = getVersion()
     .then((version) => {
       el("app-version").textContent = `v${version}`;
+      return version;
     })
     .catch(() => {
       el("app-version").textContent = "";
+      return null;
     });
   el("header-station").onclick = () =>
     el<HTMLButtonElement>("station-button").click();
@@ -1271,6 +1279,15 @@ function startApp() {
       "weather-wu-clear",
       "weather-wu-refresh",
       "weather-peet-read",
+      "weather-peet-refresh-ports",
+      "weather-peet-port",
+      "weather-peet-custom",
+      "weather-wu-station",
+      "weather-wu-key",
+      "weather-beacon-source",
+      "weather-tx-route",
+      "weather-rf-path",
+      "weather-custom-path",
     ])
       el<HTMLButtonElement>(id).disabled = busy || weatherBeaconActive;
     weatherSend.disabled = busy || weatherBeaconActive || !weatherReady;
@@ -1280,7 +1297,8 @@ function startApp() {
   function resetWeather() {
     weatherReady = false;
     weatherSend.disabled = true;
-    el("weather-observation").textContent = "";
+    el("weather-observation").textContent =
+      "Read a current observation to see your station’s weather.";
     el("weather-send-status").textContent = "";
   }
   void desktop
@@ -1288,11 +1306,13 @@ function startApp() {
     .then((station) => {
       if (station) {
         el<HTMLInputElement>("weather-wu-station").value = station;
-        weatherStatus.textContent = `Saved source: ${station}. Select Get current weather to load an observation.`;
+        if (wxSource.value === "wu")
+          weatherStatus.textContent = `Saved station: ${station}. Choose Get current weather to review its readings.`;
       }
     })
     .catch(() => {
-      weatherStatus.textContent = "Could not read saved weather source.";
+      if (wxSource.value === "wu")
+        weatherStatus.textContent = "Could not read saved weather source.";
     });
   el("weather-wu-save").onclick = async () => {
     resetWeather();
@@ -1329,11 +1349,48 @@ function startApp() {
     weatherSend.disabled = weatherBeaconActive || weatherBeaconBusy;
     weatherStatus.textContent = `${obs.source} · observed ${new Date(obs.observedAt * 1000).toLocaleString()} · ${obs.lat.toFixed(4)}°, ${obs.lon.toFixed(4)}°${obs.sourceLastChangeAt == null ? "" : ` · last change detected ${new Date(obs.sourceLastChangeAt * 1000).toLocaleTimeString()}`}`;
     const value = (v: number | null, unit: string) =>
-      v == null ? "unavailable" : `${Math.round(v * 10) / 10}${unit}`;
-    el("weather-observation").textContent =
-      `Temperature: ${obs.temperature == null ? "unavailable" : formatTemp(obs.temperature, units)} · Wind: ${obs.windSpeed == null ? "unavailable" : speedMph(obs.windSpeed, units)} from ${value(obs.windDirection, "°")} · Gust: ${obs.windGust == null ? "unavailable" : speedMph(obs.windGust, units)} · Humidity: ${value(obs.humidity, "%")} · Pressure: ${obs.pressureHpa == null ? "unavailable" : formatPressure(obs.pressureHpa * 10, units)}`;
+      v == null ? "Unavailable" : `${Math.round(v * 10) / 10}${unit}`;
+    const readings = [
+      [
+        "Temperature",
+        obs.temperature == null
+          ? "Unavailable"
+          : formatTemp(obs.temperature, units),
+      ],
+      [
+        "Wind",
+        obs.windSpeed == null ? "Unavailable" : speedMph(obs.windSpeed, units),
+      ],
+      ["Direction", value(obs.windDirection, "°")],
+      [
+        "Gust",
+        obs.windGust == null ? "Unavailable" : speedMph(obs.windGust, units),
+      ],
+      ["Humidity", value(obs.humidity, "%")],
+      [
+        "Pressure",
+        obs.pressureHpa == null
+          ? "Unavailable"
+          : formatPressure(obs.pressureHpa * 10, units),
+      ],
+    ];
+    const list = document.createElement("dl");
+    list.className = "weather-readings";
+    for (const [label, reading] of readings) {
+      const item = document.createElement("div");
+      item.className = "weather-reading";
+      const name = document.createElement("dt");
+      name.textContent = label;
+      const measurement = document.createElement("dd");
+      measurement.textContent = reading;
+      item.append(name, measurement);
+      list.append(item);
+    }
+    el("weather-observation").replaceChildren(list);
   }
   el("weather-wu-refresh").onclick = async () => {
+    if (weatherBeaconActive || weatherBeaconBusy) return;
+    weatherBeaconBusy = true;
     resetWeather();
     weatherSourceBusy(true);
     weatherStatus.textContent = "Getting current weather…";
@@ -1343,7 +1400,8 @@ function startApp() {
     } catch (error) {
       weatherStatus.textContent = String(error);
     } finally {
-      weatherSourceBusy(false);
+      weatherBeaconBusy = false;
+      syncWeatherBeaconControls();
     }
   };
   const peetPorts = el<HTMLSelectElement>("weather-peet-port");
@@ -1364,6 +1422,8 @@ function startApp() {
     }
   };
   el("weather-peet-read").onclick = async () => {
+    if (weatherBeaconActive || weatherBeaconBusy) return;
+    weatherBeaconBusy = true;
     resetWeather();
     weatherSourceBusy(true);
     weatherStatus.textContent =
@@ -1387,7 +1447,8 @@ function startApp() {
     } catch (error) {
       weatherStatus.textContent = String(error);
     } finally {
-      weatherSourceBusy(false);
+      weatherBeaconBusy = false;
+      syncWeatherBeaconControls();
     }
   };
   const wxInterval = el<HTMLInputElement>("weather-beacon-interval");
@@ -1418,8 +1479,23 @@ function startApp() {
     localStorage.setItem("openbeacon-weather-route", wxRoute.value);
     syncWeatherRoute();
   };
-  wxSource.onchange = () =>
+  function syncWeatherSource() {
+    const serial = wxSource.value === "peet";
+    el("weather-wu-settings").hidden = serial;
+    el("weather-peet-settings").hidden = !serial;
+    resetWeather();
+    const station = el<HTMLInputElement>("weather-wu-station").value;
+    weatherStatus.textContent = serial
+      ? "Select a serial device, then read its current weather."
+      : station
+        ? `Saved station: ${station}. Choose Get current weather to review its readings.`
+        : "Save a Weather Underground source, then get its current weather.";
+  }
+  wxSource.onchange = () => {
     localStorage.setItem("openbeacon-weather-source", wxSource.value);
+    syncWeatherSource();
+  };
+  syncWeatherSource();
   syncWeatherRoute();
   function weatherPath(): string | null {
     const path = (wxPath.value === "custom" ? wxCustomPath.value : wxPath.value)
@@ -4128,6 +4204,119 @@ function startApp() {
     }
   };
 
+  const whatsNewDialog = el<HTMLDialogElement>("whats-new-dialog");
+  let whatsNewVersion: string | null = null;
+  let notesRequest = 0;
+  let pendingStartupNews = false;
+  let pendingStartupSetup = false;
+  let startupIntroReady = false;
+  function renderWhatsNew(notes: ReleaseNotes) {
+    el("whats-new-title").textContent = notes.title;
+    el("whats-new-version").textContent =
+      `Version ${notes.version} · installed on this computer`;
+    const content = el("whats-new-content");
+    content.replaceChildren();
+    for (const block of releaseNotesBlocks(notes.body)) {
+      if (block.kind === "list" || block.kind === "ordered") {
+        const list = document.createElement(
+          block.kind === "list" ? "ul" : "ol",
+        );
+        for (const line of block.lines) {
+          const item = document.createElement("li");
+          item.textContent = line;
+          list.append(item);
+        }
+        content.append(list);
+      } else {
+        const element = document.createElement(
+          block.kind === "heading" ? "h3" : block.kind === "code" ? "pre" : "p",
+        );
+        element.textContent = block.lines.join(
+          block.kind === "code" ? "\n" : " ",
+        );
+        content.append(element);
+      }
+    }
+  }
+  async function openWhatsNew(version: string) {
+    whatsNewVersion = version;
+    const request = ++notesRequest;
+    renderWhatsNew(bundledReleaseNotes(version));
+    el("whats-new-source").textContent =
+      "Release highlights · checking GitHub for the full notes…";
+    el("whats-new-done").textContent = pendingStartupSetup
+      ? "Get started"
+      : "Continue";
+    if (!whatsNewDialog.open) whatsNewDialog.showModal();
+    try {
+      const notes = await desktop.releaseNotes();
+      if (request !== notesRequest || !whatsNewDialog.open) return;
+      if (notes?.version === version) {
+        renderWhatsNew(notes);
+        el("whats-new-source").textContent =
+          "Notes from this version’s GitHub release.";
+      } else
+        el("whats-new-source").textContent =
+          "Bundled release highlights · GitHub notes are unavailable.";
+    } catch {
+      if (request === notesRequest && whatsNewDialog.open)
+        el("whats-new-source").textContent =
+          "Release highlights · available offline.";
+    }
+  }
+  function showNextStartupIntro() {
+    if (!startupIntroReady || document.querySelector("dialog[open]")) return;
+    if (
+      pendingStartupNews &&
+      whatsNewVersion &&
+      shouldShowWhatsNew(
+        whatsNewVersion,
+        localStorage.getItem("openbeacon-release-notes-seen"),
+      )
+    ) {
+      pendingStartupNews = false;
+      void openWhatsNew(whatsNewVersion);
+      return;
+    }
+    pendingStartupNews = false;
+    if (pendingStartupSetup) {
+      pendingStartupSetup = false;
+      openSetup(true);
+    }
+  }
+  async function prepareStartupIntro(setup: boolean) {
+    pendingStartupSetup = setup;
+    whatsNewVersion = await appVersion;
+    pendingStartupNews = shouldShowWhatsNew(
+      whatsNewVersion,
+      localStorage.getItem("openbeacon-release-notes-seen"),
+    );
+    startupIntroReady = true;
+    showNextStartupIntro();
+  }
+  document.querySelectorAll<HTMLDialogElement>("dialog").forEach((dialog) => {
+    dialog.addEventListener("close", () =>
+      queueMicrotask(showNextStartupIntro),
+    );
+  });
+  whatsNewDialog.addEventListener("close", () => {
+    if (whatsNewVersion)
+      localStorage.setItem("openbeacon-release-notes-seen", whatsNewVersion);
+  });
+  el("whats-new-close").onclick = () => whatsNewDialog.close();
+  el("whats-new-done").onclick = () => whatsNewDialog.close();
+  el("whats-new-github").onclick = () =>
+    void desktop.openReleases().catch(() => {
+      el("whats-new-source").textContent =
+        "Could not open GitHub. Try again when your connection is available.";
+    });
+  el("open-whats-new").onclick = async () => {
+    const version = await appVersion;
+    if (!version) return;
+    mapSettingsDialog.close();
+    void openWhatsNew(version);
+  };
+
   async function startSavedConnection() {
     try {
       await listenersReady;
@@ -4146,7 +4335,7 @@ function startApp() {
         await desktop.saveSettings(settings);
       }
       if (settings) applySettings(settings);
-      if (
+      void prepareStartupIntro(
         shouldStartSetup(
           localStorage.getItem("openbeacon-setup-complete") === "true",
           Boolean(settings),
@@ -4158,9 +4347,8 @@ function startApp() {
             localStorage.getItem("openbeacon-gps-settings"),
           ),
           localStorage.getItem("openbeacon-setup-started") === "true",
-        )
-      )
-        openSetup(true);
+        ),
+      );
       try {
         const history = await desktop.loadHistory();
         for (const packet of history.reverse()) observePacket(packet, true);
@@ -4183,6 +4371,7 @@ function startApp() {
     } catch (error) {
       status("disconnected", "Settings unavailable");
       el("connect-error").textContent = String(error);
+      if (!startupIntroReady) void prepareStartupIntro(false);
     }
   }
   void startSavedConnection().then(() => {

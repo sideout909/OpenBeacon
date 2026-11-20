@@ -2,6 +2,14 @@
 
 OpenBeacon is a stable application in use by the owner and other operators, who report that it is running well. This record distinguishes reported operating experience from automated checks and tracks areas needing further coverage. See [USER_GUIDE.md](USER_GUIDE.md) for operation and [ROADMAP.md](ROADMAP.md) for follow-up work.
 
+## Version 0.2.6 changes and verification
+
+The weather station setup now groups the selected source, observation, transmission route and automatic schedule, with a shared text-size scale for both sources. Switching sources clears the displayed observation, and source controls stay locked during a read or active schedule. Existing source, RF route, path and interval settings are retained.
+
+A **What’s new** window opens on a clean installation and once after a version change, ahead of the clean-install wizard. It can be reopened from Settings. A bounded, timed GitHub request fetches the published release for the installed version; cached notes or bundled highlights cover offline and unpublished builds. Remote notes are rendered as text, not HTML. Notes are marked as seen only when the window is dismissed.
+
+Local verification: `npm run check` passes (30 TypeScript tests, 16 packet-library tests, 48 desktop tests, linting and the production frontend build). Chromium checks with a mocked desktop boundary cover clean-install sequencing, notes once per version, manual reopening, offline highlights, late responses after dismissal, safe rendering, both weather sources, RF routing, schedule controls and an 800px window. Light and dark layouts were inspected. These checks do not verify native Windows packaging or live weather hardware; test the installer and the updated weather workflow on Windows before publishing.
+
 ## Version 0.2.5 changes and verification
 
 Version 0.2.5 introduces OpenBeacon's allocated TOCALL `APOBCN` and one managed APRS-IS session for reception, iGate uploads and locally generated sends. It follows the [aprsc iGate implementation guidance](https://github.com/hessu/aprsc/blob/main/doc/IGATE-HINTS.md): RF payload bytes and trailing spaces are preserved through the first CR/LF, RX duplicate suppression is removed, DNS is resolved per reconnect, and disconnected or stale RF packets are discarded. Internet-to-RF gating is not implemented.
@@ -20,6 +28,7 @@ Before publishing the draft, check on Windows with the radio connected:
 
 ## Reported operating results
 
+- The owner reports that the 0.2.5 shared-connection build works well on Windows with no noticeable visual change. Individual live-server and radio scenarios still need specific confirmation.
 - The owner reports successful position beaconing over RF and APRS-IS, and successful RF messaging with acknowledgements.
 - The owner reports that the TM-D710A in KISS mode sends and receives in OpenBeacon. TS-2000 native TNC reception and transmission were also exercised; additional TNCs and queue/reconnect behavior need broader testing.
 - The owner reports that the Windows 11 app ran well, online maps worked, and the beta.2-to-beta.3 Windows in-app update installed and reopened with existing settings. One Windows offline map download had succeeded earlier.

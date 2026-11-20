@@ -10,6 +10,7 @@ mod history;
 mod igate;
 mod maps;
 mod messaging;
+mod releases;
 mod tnc;
 mod weather;
 
@@ -280,6 +281,7 @@ fn main() {
             beacon::clear_aprs_passcode,
             update_install_supported,
             open_releases,
+            releases::release_notes,
             open_passcode_generator,
             open_map_provider,
             connect_aprs,

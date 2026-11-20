@@ -54,6 +54,8 @@ The release artifacts are a Windows x86-64 NSIS installer and a Linux x86-64 App
 
 ## Software updates
 
+**What’s new** opens on the first launch of a clean installation and after a version change. It displays the installed version’s GitHub release notes when available, with cached notes or bundled highlights offline. Reopen it from **Settings → What’s new**.
+
 Updater-enabled Windows installers and Linux AppImages check GitHub for signed releases at startup. Open **Settings → Software updates** to check manually or install an available update. Stable and beta releases currently share one update channel. Automatic schedules and active sends or map downloads must be stopped before installation. Previous portable beta archives require a one-time manual installation of an updater-enabled release. Update packaging and verification instructions for maintainers are in [UPDATE_RELEASES.md](UPDATE_RELEASES.md).
 
 ## Shared APRS-IS connection
@@ -72,6 +74,8 @@ Open **GPS** to connect a serial receiver, NMEA TCP server, UDP sender, or a run
 NavCast's Bluetooth SPP server and its TCP/UDP outputs can share the phone's internal GPS, but have not yet been verified with OpenBeacon on a physical phone. A smartphone's standard USB connection alone does not necessarily expose GPS as a serial port. Serial framing, local TCP, UDP, and simulated gpsd reports are exercised by automated tests; this is not an end-to-end desktop or hardware test.
 
 ## Weather transmission
+
+The station setup is organized into **Weather source**, **Send weather**, and **Automatic beacon**. Select the source to show its settings; review the readings before sending.
 
 In **Weather → My weather station**, save your Weather Underground PWS station ID and API key. Create the API key under your Weather Underground profile → Member Settings → API Keys; the PWS upload key is a separate credential. The key is stored in the app configuration directory with user-only permissions on Linux. Fetch the current observation, check its timestamp and station location, then choose APRS-IS or RF and send once. Weather packets use your base callsign with SSID `-13` and the weather station symbol, regardless of the SSID or symbol selected in My Station. The weather RF path is saved separately, initially using the My Station path; an empty path sends directly. The selected route and path are remembered. Observations at least 20 minutes old, or failing Weather Underground quality control, cannot be sent. If its weather values do not change for 20 minutes, Weather Underground data is also withheld even when its observation timestamp advances. This is a conservative heuristic: real weather can remain steady. The last detected change is stored locally across app restarts; on first use the app begins observing from the first sample. Missing sensor values are not replaced with zero; rain is not transmitted because the current source fields do not provide a confirmed APRS-compatible hourly or 24-hour accumulation.
 
