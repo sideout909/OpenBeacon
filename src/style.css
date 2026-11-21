@@ -106,4 +106,6 @@ dialog .map-checkbox{display:flex;gap:8px;align-items:center}dialog .map-checkbo
 .release-notes li{margin:6px 0}
 .release-notes pre{white-space:pre-wrap;background:var(--bg);padding:12px;border-radius:6px;font-size:12px}
 #whats-new-dialog .dialog-actions{flex-wrap:wrap}
+.update-blockers{padding-left:20px}
+.update-blockers li{margin:8px 0;line-height:1.5}
 @media(max-width:1100px){.weather-setting-grid{grid-template-columns:minmax(0,1fr);gap:0}}

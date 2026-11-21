@@ -12,6 +12,7 @@ mod maps;
 mod messaging;
 mod releases;
 mod tnc;
+mod tnc_health;
 mod weather;
 
 use openbeacon_packet::aprs::{DecodedPacket, PacketOrigin};

@@ -44,8 +44,19 @@ type Reply<T> = Sender<Result<T, String>>;
 enum Command {
     Receive(Option<ReceiveConfig>, Reply<u64>),
     Igate(Option<Credentials>, Reply<u64>),
-    Send(Credentials, String, Instant, Reply<String>),
-    Rf(u64, Instant, Box<DecodedPacket>),
+    Send(
+        Credentials,
+        String,
+        Instant,
+        Option<crate::tnc::TncGuard>,
+        Reply<String>,
+    ),
+    Rf(
+        u64,
+        Instant,
+        Box<DecodedPacket>,
+        Option<crate::tnc::TncGuard>,
+    ),
     CredentialsChanged(String, Option<String>, Reply<()>),
     Shutdown(Reply<()>),
 }
@@ -139,9 +150,26 @@ impl Client {
     }
     pub(crate) fn send(&self, credentials: Credentials, payload: String) -> Result<String, String> {
         let deadline = Instant::now() + SEND_TIMEOUT;
-        self.request(|reply| Command::Send(credentials, payload, deadline, reply))
+        self.request(|reply| Command::Send(credentials, payload, deadline, None, reply))
     }
+    pub(crate) fn send_beacon(
+        &self,
+        credentials: Credentials,
+        payload: String,
+        guard: crate::tnc::TncGuard,
+    ) -> Result<String, String> {
+        let deadline = Instant::now() + SEND_TIMEOUT;
+        self.request(|reply| Command::Send(credentials, payload, deadline, Some(guard), reply))
+    }
+    #[cfg(test)]
     pub(crate) fn offer(&self, packets: &[DecodedPacket]) {
+        self.offer_with_guard(packets, None);
+    }
+    pub(crate) fn offer_with_guard(
+        &self,
+        packets: &[DecodedPacket],
+        guard: Option<crate::tnc::TncGuard>,
+    ) {
         let epoch = self.rf_session.load(Ordering::SeqCst);
         if epoch == 0 {
             return;
@@ -151,6 +179,7 @@ impl Client {
                 epoch,
                 Instant::now(),
                 Box::new(packet.clone()),
+                guard.clone(),
             ));
         }
     }
@@ -184,6 +213,7 @@ struct PendingSend {
     credentials: Credentials,
     payload: String,
     deadline: Instant,
+    tnc_guard: Option<crate::tnc::TncGuard>,
     reply: Reply<String>,
 }
 struct Socket {
@@ -423,7 +453,14 @@ where
                 }
                 let _ = reply.send(Ok(self.igate_generation));
             }
-            Command::Send(credentials, payload, deadline, reply) => {
+            Command::Send(credentials, payload, deadline, tnc_guard, reply) => {
+                if tnc_guard
+                    .as_ref()
+                    .is_some_and(|guard| !crate::tnc::guard_valid(guard))
+                {
+                    let _ = reply.send(Err(crate::tnc::TNC_PAUSED.into()));
+                    return true;
+                }
                 if self.incompatible(&credentials.call) {
                     let _ = reply.send(Err("The APRS-IS connection belongs to a different base callsign. Disconnect it and stop the iGate first.".into()));
                     return true;
@@ -456,15 +493,19 @@ where
                     credentials,
                     payload,
                     deadline,
+                    tnc_guard,
                     reply,
                 });
                 // User sends may establish or upgrade the one session; no separate send socket.
                 self.retry_at = Instant::now();
             }
-            Command::Rf(epoch, received, packet) => {
+            Command::Rf(epoch, received, packet, tnc_guard) => {
                 if epoch != self.epoch
                     || received.elapsed() >= RF_MAX_AGE
                     || self.rf_session.load(Ordering::SeqCst) == 0
+                    || tnc_guard
+                        .as_ref()
+                        .is_some_and(|guard| !crate::tnc::guard_valid(guard))
                 {
                     self.skipped += 1;
                     return true;
@@ -589,6 +630,14 @@ where
         }
         while !self.pending.is_empty() {
             let send = self.pending.remove(0);
+            if send
+                .tnc_guard
+                .as_ref()
+                .is_some_and(|guard| !crate::tnc::guard_valid(guard))
+            {
+                let _ = send.reply.send(Err(crate::tnc::TNC_PAUSED.into()));
+                continue;
+            }
             if Instant::now() >= send.deadline {
                 let _ = send.reply.send(Err(
                     "Send expired before transmission; no packet sent.".into()
@@ -1044,6 +1093,7 @@ mod tests {
                 old_epoch,
                 Instant::now(),
                 Box::new(rf(b"!old-session")),
+                None,
             ))
             .unwrap();
         h.client
@@ -1052,6 +1102,7 @@ mod tests {
                 new_epoch,
                 Instant::now() - RF_MAX_AGE,
                 Box::new(rf(b"!stale")),
+                None,
             ))
             .unwrap();
         h.client.offer(&[rf(b"!fresh")]);
@@ -1076,6 +1127,7 @@ mod tests {
                 credentials("N0ABC-1", Some("123")),
                 "!requested".into(),
                 Instant::now() + SEND_TIMEOUT,
+                None,
                 reply,
             ))
             .unwrap();
@@ -1124,6 +1176,7 @@ mod tests {
                 credentials("N0ABC-1", Some("123")),
                 "!expired".into(),
                 Instant::now() - Duration::from_secs(1),
+                None,
                 reply,
             ))
             .unwrap();
@@ -1137,5 +1190,60 @@ mod tests {
         assert_eq!(h.connections.load(Ordering::SeqCst), 1);
         h.stop();
         assert!(peer.line().is_empty());
+    }
+
+    #[test]
+    fn beacon_queued_before_tnc_failure_is_not_sent_after_login_or_recovery() {
+        let h = Harness::new();
+        let health = Arc::new(AtomicU64::new(10));
+        let (reply, result) = mpsc::channel();
+        h.client
+            .commands
+            .send(Command::Send(
+                credentials("N0ABC-1", Some("123")),
+                "!old".into(),
+                Instant::now() + SEND_TIMEOUT,
+                Some((health.clone(), 10)),
+                reply,
+            ))
+            .unwrap();
+        let mut peer = h.accept();
+        assert!(peer.line().starts_with(b"user N0ABC-1 pass 123 "));
+        health.store(11, Ordering::SeqCst);
+        health.store(12, Ordering::SeqCst);
+        peer.write(b"# logresp N0ABC-1 verified, server test\r\n");
+        assert!(result
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .is_err());
+        let fresh = spawn_send(&h.client, "N0ABC-1", "!fresh");
+        assert_eq!(peer.line(), b"N0ABC-1>APOBCN,TCPIP*:!fresh\r\n");
+        fresh.join().unwrap().unwrap();
+        h.stop();
+    }
+
+    #[test]
+    fn rf_packet_from_before_tnc_failure_is_not_igated_after_recovery() {
+        let h = Harness::new();
+        h.client
+            .igate(Some(credentials("N0ABC-15", Some("123"))))
+            .unwrap();
+        let mut peer = h.accept();
+        peer.login("N0ABC-15", "123", true);
+        h.wait(|e| matches!(e, Event::IgateStatus(_, "connected", _, _, _)));
+        let epoch = h.client.rf_session.load(Ordering::SeqCst);
+        let health = Arc::new(AtomicU64::new(12));
+        h.client
+            .commands
+            .send(Command::Rf(
+                epoch,
+                Instant::now(),
+                Box::new(rf(b"!old")),
+                Some((health, 10)),
+            ))
+            .unwrap();
+        h.client.offer(&[rf(b"!fresh")]);
+        assert_eq!(peer.line(), b"K9ABC>APTEST,qAO,N0ABC-15:!fresh\r\n");
+        h.stop();
     }
 }

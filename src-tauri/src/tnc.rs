@@ -16,7 +16,51 @@ use tauri::{Emitter, Manager, State};
 
 type TxState = Arc<Mutex<Option<(u64, mpsc::Sender<TxRequest>)>>>;
 #[derive(Default)]
-pub struct Tnc(Arc<AtomicU64>, TxState);
+pub struct Tnc(Arc<AtomicU64>, TxState, Arc<AtomicU64>);
+
+pub(crate) const TNC_PAUSED: &str =
+    "TNC connection is unconfirmed; iGate and beaconing are paused.";
+pub(crate) type TncGuard = (Arc<AtomicU64>, u64);
+pub(crate) fn guard_valid(guard: &TncGuard) -> bool {
+    guard.1 & 1 == 0 && guard.0.load(Ordering::SeqCst) == guard.1
+}
+
+impl Tnc {
+    pub(crate) fn beacon_guard(&self) -> Result<TncGuard, String> {
+        let epoch = self.2.load(Ordering::SeqCst);
+        if epoch & 1 != 0 {
+            Err(TNC_PAUSED.into())
+        } else {
+            Ok((self.2.clone(), epoch))
+        }
+    }
+}
+fn next_health_generation(health: &AtomicU64, generation: u64) {
+    let mut current = health.load(Ordering::SeqCst);
+    loop {
+        if current >> 32 >= generation {
+            return;
+        }
+        let next = (generation << 32) | (current & 1);
+        match health.compare_exchange(current, next, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => return,
+            Err(actual) => current = actual,
+        }
+    }
+}
+fn set_health(health: &AtomicU64, generation: u64, paused: bool) {
+    let mut current = health.load(Ordering::SeqCst);
+    loop {
+        if current >> 32 != generation || current & 1 == u64::from(paused) {
+            return;
+        }
+        let next = (current.wrapping_add(2) & !1) | u64::from(paused);
+        match health.compare_exchange(current, next, Ordering::SeqCst, Ordering::SeqCst) {
+            Ok(_) => return,
+            Err(actual) => current = actual,
+        }
+    }
+}
 struct TxRequest {
     kiss: Vec<u8>,
     call: String,
@@ -204,6 +248,7 @@ struct Status {
     message: String,
     received: u64,
     errors: u64,
+    beacon_paused: bool,
 }
 #[derive(Clone, Serialize)]
 struct Batch {
@@ -226,11 +271,21 @@ fn report(
             message,
             received,
             errors,
+            beacon_paused: app.state::<Tnc>().2.load(Ordering::SeqCst) & 1 != 0,
         },
     );
 }
 fn active(token: &AtomicU64, generation: u64) -> bool {
     token.load(Ordering::SeqCst) == generation
+}
+fn wait_for_retry(token: &AtomicU64, generation: u64, started: Instant) {
+    let delay = crate::tnc_health::retry_delay(started.elapsed());
+    for _ in 0..(delay.as_millis().div_ceil(250) as u64) {
+        if !active(token, generation) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
 }
 fn decode_kiss_bytes(
     decoder: &mut KissDecoder,
@@ -264,11 +319,14 @@ pub fn connect_tnc(
         .parse()
         .map_err(|_| "Enter an IP address and port, such as 127.0.0.1:8001.".to_string())?;
     let generation = state.0.fetch_add(1, Ordering::SeqCst) + 1;
+    next_health_generation(&state.2, generation);
     let token = state.0.clone();
     let transmitter = state.1.clone();
+    let health = state.2.clone();
     std::thread::spawn(move || {
-        let (mut received, mut errors, mut retry) = (0, 0, 1);
+        let (mut received, mut errors) = (0, 0);
         while active(&token, generation) {
+            let attempt_started = Instant::now();
             let exited = app
                 .state::<Modem>()
                 .0
@@ -277,6 +335,7 @@ pub fn connect_tnc(
                 .and_then(|mut child| child.as_mut().and_then(|p| p.try_wait().ok().flatten()))
                 .is_some();
             if managed && exited {
+                set_health(&health, generation, true);
                 report(&app, generation, "stopped", "Dire Wolf exited. Check direwolf.log in the OpenBeacon configuration directory.".into(), received, errors);
                 break;
             }
@@ -288,6 +347,7 @@ pub fn connect_tnc(
                 received,
                 errors,
             );
+            let mut reason = "TNC connection lost or unconfirmed";
             match TcpStream::connect_timeout(&addr, Duration::from_secs(3)) {
                 Ok(mut stream) => {
                     if !active(&token, generation) {
@@ -295,13 +355,23 @@ pub fn connect_tnc(
                     }
                     let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
                     let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+                    let mut watchdog = crate::tnc_health::Watchdog::new(
+                        Instant::now(),
+                        health.load(Ordering::SeqCst) & 1 != 0,
+                    );
                     report(
                         &app,
                         generation,
-                        "connected",
+                        if watchdog.recovering() {
+                            "reconnecting"
+                        } else {
+                            "connected"
+                        },
                         format!(
                             "{} KISS · {addr}",
-                            if managed && !app.state::<Modem>().1.load(Ordering::SeqCst) {
+                            if watchdog.recovering() {
+                                "Waiting for a valid packet; iGate and beaconing paused ·"
+                            } else if managed && !app.state::<Modem>().1.load(Ordering::SeqCst) {
                                 "Receive-only"
                             } else {
                                 "Connected"
@@ -310,21 +380,35 @@ pub fn connect_tnc(
                         received,
                         errors,
                     );
-                    retry = 1;
                     let managed_transmit = managed && app.state::<Modem>().1.load(Ordering::SeqCst);
-                    let tx = (!managed || managed_transmit)
+                    let mut tx = (!watchdog.recovering() && (!managed || managed_transmit))
                         .then(|| register_tx(&transmitter, generation));
                     let mut decoder = KissDecoder::default();
+                    let mut gps = crate::tnc_health::NmeaDetector::default();
                     let mut buf = [0; 4096];
                     while active(&token, generation) {
+                        if watchdog.expired(Instant::now()) {
+                            reason = "No valid TNC packets received";
+                            set_health(&health, generation, true);
+                            clear_tx(&transmitter, generation);
+                            break;
+                        }
                         if tx.as_ref().is_some_and(|rx| {
-                            !process_tx(&mut stream, rx, false, || active(&token, generation))
+                            !process_tx(&mut stream, rx, false, || {
+                                active(&token, generation) && health.load(Ordering::SeqCst) & 1 == 0
+                            })
                         }) {
                             break;
                         }
                         match stream.read(&mut buf) {
                             Ok(0) => break,
                             Ok(n) => {
+                                if gps.feed(&buf[..n]) {
+                                    reason = "GPS data detected instead of TNC packets";
+                                    set_health(&health, generation, true);
+                                    clear_tx(&transmitter, generation);
+                                    break;
+                                }
                                 let interface = if managed {
                                     "Dire Wolf".to_string()
                                 } else {
@@ -332,6 +416,12 @@ pub fn connect_tnc(
                                 };
                                 let (packets, bad) =
                                     decode_kiss_bytes(&mut decoder, &buf[..n], &interface);
+                                if !packets.is_empty() && watchdog.packet(Instant::now()) {
+                                    set_health(&health, generation, false);
+                                    if !managed || managed_transmit {
+                                        tx = Some(register_tx(&transmitter, generation));
+                                    }
+                                }
                                 received += packets.len() as u64;
                                 errors += bad;
                                 if !packets.is_empty() && active(&token, generation) {
@@ -350,10 +440,17 @@ pub fn connect_tnc(
                                 report(
                                     &app,
                                     generation,
-                                    "connected",
+                                    if watchdog.recovering() {
+                                        "reconnecting"
+                                    } else {
+                                        "connected"
+                                    },
                                     format!(
                                         "{} KISS · {addr}",
-                                        if managed && !app.state::<Modem>().1.load(Ordering::SeqCst)
+                                        if watchdog.recovering() {
+                                            "Waiting for a valid packet; iGate and beaconing paused ·"
+                                        } else if managed
+                                            && !app.state::<Modem>().1.load(Ordering::SeqCst)
                                         {
                                             "Receive-only"
                                         } else {
@@ -384,21 +481,20 @@ pub fn connect_tnc(
             }
             clear_tx(&transmitter, generation);
             if active(&token, generation) {
+                set_health(&health, generation, true);
+                let delay = crate::tnc_health::retry_delay(attempt_started.elapsed());
                 report(
                     &app,
                     generation,
                     "reconnecting",
-                    format!("Reconnecting in {retry}s · {addr}"),
+                    format!(
+                        "{reason}; iGate and beaconing paused. Reconnecting in {}s · {addr}",
+                        delay.as_secs()
+                    ),
                     received,
                     errors,
                 );
-                for _ in 0..retry * 4 {
-                    if !active(&token, generation) {
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(250));
-                }
-                retry = (retry * 2).min(30);
+                wait_for_retry(&token, generation, attempt_started);
             }
         }
     });
@@ -654,11 +750,14 @@ pub fn connect_serial_tnc(
         _ => serialport::FlowControl::None,
     };
     let generation = state.0.fetch_add(1, Ordering::SeqCst) + 1;
+    next_health_generation(&state.2, generation);
     let token = state.0.clone();
     let transmitter = state.1.clone();
+    let health = state.2.clone();
     std::thread::spawn(move || {
-        let (mut received, mut errors, mut retry) = (0, 0, 1);
+        let (mut received, mut errors) = (0, 0);
         while active(&token, generation) {
+            let attempt_started = Instant::now();
             report(
                 &app,
                 generation,
@@ -667,6 +766,7 @@ pub fn connect_serial_tnc(
                 received,
                 errors,
             );
+            let mut reason = "TNC connection lost or unconfirmed";
             match serialport::new(&port, baud)
                 .data_bits(serialport::DataBits::Eight)
                 .parity(serialport::Parity::None)
@@ -685,6 +785,7 @@ pub fn connect_serial_tnc(
                     #[cfg(target_os = "windows")]
                     if mode == "d710kiss" && flow == "none" {
                         if let Err(error) = stream.write_request_to_send(true) {
+                            set_health(&health, generation, true);
                             report(
                                 &app,
                                 generation,
@@ -708,13 +809,26 @@ pub fn connect_serial_tnc(
                         );
                         match ts2000_kiss_prepare(&mut stream, || active(&token, generation)) {
                             Ok(true) => {
+                                set_health(&health, generation, true);
                                 report(&app, generation, "power_cycle", "KISS is enabled. Power the TS-2000 off and back on, then select Start receiver.".into(), received, errors);
                                 break;
                             }
                             Ok(false) => ts2000_unconfirmed = true,
                             Err(e) => {
-                                report(&app, generation, "stopped", e, received, errors);
-                                break;
+                                set_health(&health, generation, true);
+                                report(
+                                    &app,
+                                    generation,
+                                    "reconnecting",
+                                    format!(
+                                        "{e} Retrying in one minute; iGate and beaconing paused."
+                                    ),
+                                    received,
+                                    errors,
+                                );
+                                drop(stream);
+                                wait_for_retry(&token, generation, attempt_started);
+                                continue;
                             }
                         }
                         if !active(&token, generation) {
@@ -735,21 +849,51 @@ pub fn connect_serial_tnc(
                             Ok(true) => {}
                             Ok(false) => d710_unconfirmed = true,
                             Err(e) => {
-                                report(&app, generation, "stopped", e, received, errors);
-                                break;
+                                set_health(&health, generation, true);
+                                report(
+                                    &app,
+                                    generation,
+                                    "reconnecting",
+                                    format!(
+                                        "{e} Retrying in one minute; iGate and beaconing paused."
+                                    ),
+                                    received,
+                                    errors,
+                                );
+                                drop(stream);
+                                wait_for_retry(&token, generation, attempt_started);
+                                continue;
                             }
                         }
                         if !active(&token, generation) {
                             break;
                         }
                     }
-                    retry = 1;
+                    let recovering = health.load(Ordering::SeqCst) & 1 != 0;
+                    if recovering {
+                        if let Err(error) = stream.clear(serialport::ClearBuffer::Input) {
+                            report(&app, generation, "reconnecting", format!("Could not clear old TNC input: {error}. iGate and beaconing remain paused."), received, errors);
+                            drop(stream);
+                            wait_for_retry(&token, generation, attempt_started);
+                            continue;
+                        }
+                    }
+                    let mut watchdog = crate::tnc_health::Watchdog::new(Instant::now(), recovering);
                     report(
                         &app,
                         generation,
-                        "connected",
+                        if watchdog.recovering() {
+                            "reconnecting"
+                        } else {
+                            "connected"
+                        },
                         format!(
-                            "Connected · {} · {port} · {baud} baud",
+                            "{} · {} · {port} · {baud} baud",
+                            if watchdog.recovering() {
+                                "Waiting for a valid packet; iGate and beaconing paused"
+                            } else {
+                                "Connected"
+                            },
                             if mode == "ts2000kiss" && ts2000_unconfirmed {
                                 "TS-2000 KISS (mode unconfirmed)"
                             } else if mode == "d710kiss" && d710_unconfirmed {
@@ -765,18 +909,26 @@ pub fn connect_serial_tnc(
                         received,
                         errors,
                     );
-                    let tx = (mode == "kiss"
-                        || mode == "d710kiss"
-                        || mode == "ts2000kiss"
-                        || mode == "ts2000")
+                    let mut tx = (!watchdog.recovering()
+                        && (mode == "kiss"
+                            || mode == "d710kiss"
+                            || mode == "ts2000kiss"
+                            || mode == "ts2000"))
                         .then(|| register_tx(&transmitter, generation));
                     let mut decoder = KissDecoder::default();
                     let mut monitor = MonitorDecoder::default();
+                    let mut gps = crate::tnc_health::NmeaDetector::default();
                     let mut buf = [0u8; 4096];
                     while active(&token, generation) {
+                        if watchdog.expired(Instant::now()) {
+                            reason = "No valid TNC packets received";
+                            set_health(&health, generation, true);
+                            clear_tx(&transmitter, generation);
+                            break;
+                        }
                         if tx.as_ref().is_some_and(|rx| {
                             !process_tx(&mut stream, rx, mode == "ts2000", || {
-                                active(&token, generation)
+                                active(&token, generation) && health.load(Ordering::SeqCst) & 1 == 0
                             })
                         }) {
                             break;
@@ -784,6 +936,16 @@ pub fn connect_serial_tnc(
                         match stream.read(&mut buf) {
                             Ok(0) => {}
                             Ok(n) => {
+                                if if matches!(mode.as_str(), "kiss" | "d710kiss" | "ts2000kiss") {
+                                    gps.feed(&buf[..n])
+                                } else {
+                                    gps.feed_text(&buf[..n])
+                                } {
+                                    reason = "GPS data detected instead of TNC packets";
+                                    set_health(&health, generation, true);
+                                    clear_tx(&transmitter, generation);
+                                    break;
+                                }
                                 let (packets, bad) = if mode == "kiss"
                                     || mode == "d710kiss"
                                     || mode == "ts2000kiss"
@@ -796,10 +958,23 @@ pub fn connect_serial_tnc(
                                 } else {
                                     monitor.feed(&buf[..n], &format!("Kenwood TNC monitor {port}"))
                                 };
+                                if packets.iter().any(|p| p.origin == PacketOrigin::Rf)
+                                    && watchdog.packet(Instant::now())
+                                {
+                                    set_health(&health, generation, false);
+                                    if matches!(
+                                        mode.as_str(),
+                                        "kiss" | "d710kiss" | "ts2000kiss" | "ts2000"
+                                    ) {
+                                        tx = Some(register_tx(&transmitter, generation));
+                                    }
+                                }
                                 received += packets.len() as u64;
                                 errors += bad;
                                 if !packets.is_empty() && active(&token, generation) {
-                                    crate::igate::offer(&app, &packets);
+                                    if !watchdog.recovering() {
+                                        crate::igate::offer(&app, &packets);
+                                    }
                                     if let Err(error) = crate::history::save(&app, &packets) {
                                         let _ = app.emit("history-error", error);
                                     }
@@ -814,9 +989,18 @@ pub fn connect_serial_tnc(
                                 report(
                                     &app,
                                     generation,
-                                    "connected",
+                                    if watchdog.recovering() {
+                                        "reconnecting"
+                                    } else {
+                                        "connected"
+                                    },
                                     format!(
-                                        "Connected · {} · {port} · {baud} baud",
+                                        "{} · {} · {port} · {baud} baud",
+                                        if watchdog.recovering() {
+                                            "Waiting for a valid packet; iGate and beaconing paused"
+                                        } else {
+                                            "Connected"
+                                        },
                                         if mode == "kiss"
                                             || mode == "d710kiss"
                                             || mode == "ts2000kiss"
@@ -866,21 +1050,20 @@ pub fn connect_serial_tnc(
             }
             clear_tx(&transmitter, generation);
             if active(&token, generation) {
+                set_health(&health, generation, true);
+                let delay = crate::tnc_health::retry_delay(attempt_started.elapsed());
                 report(
                     &app,
                     generation,
                     "reconnecting",
-                    format!("Reconnecting to {port} in {retry}s"),
+                    format!(
+                        "{reason}; iGate and beaconing paused. Reconnecting to {port} in {}s",
+                        delay.as_secs()
+                    ),
                     received,
                     errors,
                 );
-                for _ in 0..retry * 4 {
-                    if !active(&token, generation) {
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(250));
-                }
-                retry = (retry * 2).min(30);
+                wait_for_retry(&token, generation, attempt_started);
             }
         }
     });
@@ -894,7 +1077,8 @@ pub fn shutdown(app: &tauri::AppHandle) {
 }
 #[tauri::command]
 pub fn disconnect_tnc(state: State<'_, Tnc>) {
-    state.0.fetch_add(1, Ordering::SeqCst);
+    let generation = state.0.fetch_add(1, Ordering::SeqCst) + 1;
+    next_health_generation(&state.2, generation);
     *state.1.lock().unwrap() = None;
 }
 
@@ -943,12 +1127,14 @@ pub(crate) async fn send_rf_payload(
     path: String,
     payload: String,
 ) -> Result<String, String> {
+    let guard = state.beacon_guard()?;
     let bytes = rf_frame(&callsign, &path, &payload)?;
     let (reply, rx) = mpsc::sync_channel(1);
     let generation = state.0.load(Ordering::SeqCst);
     {
-        let guard = state.1.lock().map_err(|_| "TNC unavailable")?;
-        let (_, tx) = guard.as_ref().filter(|(g, _)| *g == generation).ok_or("Connect a serial or TCP KISS TNC, or select the TS-2000 model for Kenwood text mode. Enable soundcard transmission with a PTT method if using bundled Dire Wolf.")?;
+        let tx_guard = state.1.lock().map_err(|_| "TNC unavailable")?;
+        let (_, tx) = tx_guard.as_ref().filter(|(g, _)| *g == generation).ok_or_else(||
+            if !guard_valid(&guard) { TNC_PAUSED } else { "Connect a serial or TCP KISS TNC, or select the TS-2000 model for Kenwood text mode. Enable soundcard transmission with a PTT method if using bundled Dire Wolf." })?;
         tx.send(TxRequest {
             kiss: bytes,
             call: callsign.clone(),
@@ -957,15 +1143,28 @@ pub(crate) async fn send_rf_payload(
             result: reply,
             deadline: Instant::now() + Duration::from_secs(40),
         })
-        .map_err(|_| "TNC disconnected before sending")?;
+        .map_err(|_| {
+            if guard_valid(&guard) {
+                "TNC disconnected before sending"
+            } else {
+                TNC_PAUSED
+            }
+        })?;
     }
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         rx.recv_timeout(Duration::from_secs(40)).map_err(|_| {
             "TNC did not confirm the write; transmission outcome may be unknown".to_string()
         })?
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| e.to_string())?;
+    if let Err(error) = result {
+        return Err(if guard_valid(&guard) {
+            error
+        } else {
+            TNC_PAUSED.into()
+        });
+    }
     Ok(format!(
         "{callsign}>{}{}:{payload}",
         crate::TOCALL,
@@ -1259,6 +1458,50 @@ pub fn list_playback_devices() -> Result<Vec<CaptureDevice>, String> {
 }
 #[cfg(test)]
 mod capture_tests {
+    #[test]
+    fn stale_tnc_guards_never_revive_after_recovery_or_generation_change() {
+        use super::*;
+        let health = Arc::new(AtomicU64::new(0));
+        next_health_generation(&health, 1);
+        let old = (health.clone(), health.load(Ordering::SeqCst));
+        assert!(guard_valid(&old));
+        set_health(&health, 1, true);
+        assert!(!guard_valid(&old));
+        set_health(&health, 1, false);
+        assert!(!guard_valid(&old));
+        let fresh = (health.clone(), health.load(Ordering::SeqCst));
+        assert!(guard_valid(&fresh));
+        next_health_generation(&health, 2);
+        set_health(&health, 1, true);
+        assert_eq!(health.load(Ordering::SeqCst) & 1, 0);
+        assert!(!guard_valid(&fresh));
+    }
+    #[test]
+    fn queued_rf_transmission_is_rejected_when_tnc_becomes_unconfirmed() {
+        use super::*;
+        use std::io::Cursor;
+        let health = Arc::new(AtomicU64::new(0));
+        next_health_generation(&health, 1);
+        let (tx, rx) = mpsc::channel();
+        let (reply, result) = mpsc::sync_channel(1);
+        tx.send(TxRequest {
+            kiss: b"do not transmit".to_vec(),
+            call: "K1ABC".into(),
+            path: String::new(),
+            payload: String::new(),
+            result: reply,
+            deadline: Instant::now() + Duration::from_secs(1),
+        })
+        .unwrap();
+        set_health(&health, 1, true);
+        let mut output = Cursor::new(Vec::<u8>::new());
+        assert!(process_tx(&mut output, &rx, false, || health
+            .load(Ordering::SeqCst)
+            & 1
+            == 0));
+        assert!(output.into_inner().is_empty());
+        assert!(result.recv().unwrap().is_err());
+    }
     #[test]
     fn queued_transmissions_expire_and_disconnect_cancels_remaining_frames() {
         use super::*;

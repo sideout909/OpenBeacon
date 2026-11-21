@@ -498,9 +498,10 @@ pub async fn send_weather(
     match route.as_str() {
         "rf" => tnc::send_rf_payload(tnc, call, path, body).await,
         "ip" => {
+            let guard = tnc.beacon_guard()?;
             let pass = beacon::load_passcode(&app, &call)?;
             tauri::async_runtime::spawn_blocking(move || {
-                beacon::transmit(&app, &call, &pass, &body)
+                beacon::transmit_beacon(&app, &call, &pass, &body, guard)
             })
             .await
             .map_err(|_| "Weather transmission failed.")?

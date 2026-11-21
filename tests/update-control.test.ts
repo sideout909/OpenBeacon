@@ -1,18 +1,41 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { updateBlocked, updateDownloadDetails } from "../src/update-control.ts";
+import {
+  updateBlocked,
+  updateBlockers,
+  updateDownloadDetails,
+  type UpdateActivity,
+} from "../src/update-control.ts";
+
+const idle: UpdateActivity = {
+  positionBeacon: false,
+  weatherBeacon: false,
+  igate: false,
+  transmitting: false,
+  weatherBusy: false,
+  mapDownload: false,
+};
 
 test("updates wait for each active transmission or map download", () => {
-  const idle = {
-    positionBeacon: false,
-    weatherBeacon: false,
-    transmitting: false,
-    weatherBusy: false,
-    mapDownload: false,
-  };
   assert.equal(updateBlocked(idle), false);
   for (const key of Object.keys(idle))
     assert.equal(updateBlocked({ ...idle, [key]: true }), true, key);
+});
+
+test("an update identifies the remaining operation after schedules are stopped", () => {
+  const reasons = updateBlockers({ ...idle, weatherBusy: true });
+  assert.equal(reasons.length, 1);
+  assert.match(reasons[0], /weather read or send/);
+  assert.doesNotMatch(reasons[0], /disconnect|iGate|map/i);
+  assert.equal(updateBlocked(idle), false);
+});
+
+test("updates report every blocker and explain the separate iGate stop control", () => {
+  const reasons = updateBlockers({ ...idle, igate: true, mapDownload: true });
+  assert.equal(reasons.length, 2);
+  assert.match(reasons[0], /RF → APRS-IS iGate in TNC/);
+  assert.match(reasons[1], /cancellation to complete/);
+  assert.deepEqual(updateBlockers(idle), []);
 });
 
 test("download details show known sizes or downloaded bytes alone", () => {

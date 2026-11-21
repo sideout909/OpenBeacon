@@ -1,7 +1,7 @@
 import { check as checkUpdate, type Update } from "@tauri-apps/plugin-updater";
 import { getVersion } from "@tauri-apps/api/app";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { updateBlocked, updateDownloadDetails } from "./update-control";
+import { updateBlockers, updateDownloadDetails } from "./update-control";
 import { savedBeaconRoute } from "./beacon-routes";
 import { shouldStartSetup } from "./setup-wizard";
 import {
@@ -1266,6 +1266,7 @@ function startApp() {
   };
   el("refresh-weather").onclick = () => void refreshForecast();
   let weatherReady = false;
+  let tncBeaconPaused = false;
   let weatherBeaconActive = false;
   let weatherBeaconPaused = false;
   let weatherBeaconBusy = false;
@@ -1602,6 +1603,14 @@ function startApp() {
     const run = async () => {
       if (!weatherBeaconActive || generation !== weatherBeaconGeneration)
         return;
+      if (tncBeaconPaused) {
+        weatherBeaconPaused = true;
+        wxScheduleStatus.textContent =
+          "Weather beacon paused while the TNC reconnects.";
+        weatherBeaconTimer = setTimeout(() => void run(), 60000);
+        syncWeatherBeaconControls();
+        return;
+      }
       if (
         call !== savedCallsign ||
         (source === "peet" &&
@@ -1617,6 +1626,7 @@ function startApp() {
         return;
       }
       weatherBeaconBusy = true;
+      let retryForTnc = false;
       syncWeatherBeaconControls();
       wxScheduleStatus.textContent = "Checking weather before transmission…";
       try {
@@ -1637,14 +1647,22 @@ function startApp() {
         wxScheduleStatus.textContent = `Weather packet sent to the selected connection at ${new Date().toLocaleTimeString()}.`;
       } catch (error) {
         if (weatherBeaconActive && generation === weatherBeaconGeneration) {
-          resetWeather();
+          retryForTnc =
+            tncBeaconPaused ||
+            String(error).includes("TNC connection is unconfirmed");
+          if (!retryForTnc) resetWeather();
           weatherBeaconPaused = true;
-          wxScheduleStatus.textContent = `Weather beacon paused: ${String(error)} It will check again at the next interval.`;
+          wxScheduleStatus.textContent = retryForTnc
+            ? "Weather beacon paused while the TNC reconnects."
+            : `Weather beacon paused: ${String(error)} It will check again at the next interval.`;
         }
       } finally {
         weatherBeaconBusy = false;
         if (weatherBeaconActive && generation === weatherBeaconGeneration) {
-          weatherBeaconTimer = setTimeout(() => void run(), interval);
+          weatherBeaconTimer = setTimeout(
+            () => void run(),
+            retryForTnc ? 60000 : interval,
+          );
         }
         syncWeatherBeaconControls();
       }
@@ -2137,6 +2155,7 @@ function startApp() {
   el("open-map-configurator").onclick = openMapConfigurator;
   el("close-map-config").onclick = () => mapConfigDialog.close();
   let activeMapDownload: string | null = null;
+  let mapDownloadBusy = false;
   let mapDownloadSequence = 0;
   const mapDownloadProgress = el<HTMLProgressElement>("map-download-progress");
   el("cancel-map-download").onclick = () => {
@@ -2158,6 +2177,7 @@ function startApp() {
       `Downloading map tiles… ${percent}%`;
   });
   el("download-map").onclick = async () => {
+    if (mapDownloadBusy) return;
     if (updateApplying) {
       el("map-download-status").textContent = "An update is being installed.";
       return;
@@ -2169,6 +2189,7 @@ function startApp() {
     download.disabled = true;
     cancel.disabled = false;
     const requestId = String(++mapDownloadSequence);
+    mapDownloadBusy = true;
     activeMapDownload = requestId;
     mapDownloadProgress.hidden = false;
     mapDownloadProgress.removeAttribute("value");
@@ -2201,6 +2222,7 @@ function startApp() {
       mapDownloadProgress.hidden = true;
       el("map-download-status").textContent = String(error);
     } finally {
+      mapDownloadBusy = false;
       activeMapDownload = null;
       download.disabled = false;
       cancel.disabled = true;
@@ -2934,6 +2956,12 @@ function startApp() {
       !fixedBeaconPosition
     )
       return;
+    if (tncBeaconPaused) {
+      el("beacon-schedule-state").textContent =
+        "Beaconing paused while the TNC reconnects.";
+      beaconTimer = setTimeout(() => void scheduledBeacon(generation), 60000);
+      return;
+    }
     beaconSending = true;
     updateBeaconMode();
     el("beacon-schedule-state").textContent = "Sending scheduled beacon…";
@@ -2953,8 +2981,20 @@ function startApp() {
         next - Date.now(),
       );
     } catch (error) {
-      if (generation === beaconScheduleGeneration)
-        stopBeaconSchedule(`Automatic beaconing stopped: ${String(error)}`);
+      if (generation === beaconScheduleGeneration) {
+        if (
+          tncBeaconPaused ||
+          String(error).includes("TNC connection is unconfirmed")
+        ) {
+          el("beacon-schedule-state").textContent =
+            "Beaconing paused while the TNC reconnects.";
+          beaconTimer = setTimeout(
+            () => void scheduledBeacon(generation),
+            60000,
+          );
+        } else
+          stopBeaconSchedule(`Automatic beaconing stopped: ${String(error)}`);
+      }
     } finally {
       beaconSending = false;
       updateBeaconMode();
@@ -3051,6 +3091,11 @@ function startApp() {
       generation !== beaconScheduleGeneration
     )
       return;
+    if (tncBeaconPaused) {
+      el("mobile-beacon-state").textContent =
+        "SmartBeaconing paused while the TNC reconnects.";
+      return;
+    }
     beaconSending = true;
     updateBeaconMode();
     try {
@@ -3069,8 +3114,15 @@ function startApp() {
       el("mobile-beacon-state").textContent =
         `SmartBeaconing active · last beacon ${new Date().toLocaleTimeString()}`;
     } catch (error) {
-      if (generation === beaconScheduleGeneration)
-        stopBeaconSchedule(`SmartBeaconing stopped: ${String(error)}`);
+      if (generation === beaconScheduleGeneration) {
+        if (
+          tncBeaconPaused ||
+          String(error).includes("TNC connection is unconfirmed")
+        )
+          el("mobile-beacon-state").textContent =
+            "SmartBeaconing paused while the TNC reconnects.";
+        else stopBeaconSchedule(`SmartBeaconing stopped: ${String(error)}`);
+      }
     } finally {
       beaconSending = false;
       updateBeaconMode();
@@ -3162,14 +3214,14 @@ function startApp() {
     const settings = smartSettings();
     if (
       settings &&
-      lastMobileTime &&
-      smartBeaconDecision(
-        settings,
-        fix.speedKnots * 1.150779448,
-        fix.course,
-        lastMobileCourse,
-        (performance.now() - lastMobileTime) / 1000,
-      )
+      (!lastMobileTime ||
+        smartBeaconDecision(
+          settings,
+          fix.speedKnots * 1.150779448,
+          fix.course,
+          lastMobileCourse,
+          (performance.now() - lastMobileTime) / 1000,
+        ))
     )
       void sendMobileFix(beaconScheduleGeneration, fix);
   }, 1000);
@@ -3492,6 +3544,13 @@ function startApp() {
   el("header-callsign").textContent = savedCallsign || "Not configured";
   let igateGeneration = 0;
   let igateWanted = false;
+  let igateSessionMessage = "Stopped";
+  const showIgateStatus = () => {
+    el("igate-status").textContent =
+      igateWanted && tncBeaconPaused
+        ? `Forwarding paused while TNC reconnects · ${igateSessionMessage}`
+        : igateSessionMessage;
+  };
   const igateCall = el<HTMLInputElement>("igate-call");
   const igateAuto = el<HTMLInputElement>("igate-autostart");
   igateAuto.checked =
@@ -3514,7 +3573,8 @@ function startApp() {
     igateWanted = true;
     el<HTMLButtonElement>("igate-start").disabled = true;
     el<HTMLButtonElement>("igate-stop").disabled = false;
-    el("igate-status").textContent = "Starting…";
+    igateSessionMessage = "Starting…";
+    showIgateStatus();
     try {
       await listenersReady;
       igateGeneration = await desktop.startIgate(
@@ -3525,7 +3585,8 @@ function startApp() {
       igateWanted = false;
       el<HTMLButtonElement>("igate-start").disabled = false;
       el<HTMLButtonElement>("igate-stop").disabled = true;
-      el("igate-status").textContent = String(error);
+      igateSessionMessage = String(error);
+      showIgateStatus();
     }
   };
   el("igate-stop").onclick = async () => {
@@ -3533,7 +3594,8 @@ function startApp() {
     await desktop.stopIgate();
     el<HTMLButtonElement>("igate-start").disabled = false;
     el<HTMLButtonElement>("igate-stop").disabled = true;
-    el("igate-status").textContent = "Stopped";
+    igateSessionMessage = "Stopped";
+    showIgateStatus();
   };
 
   let savedSymbol = "/-";
@@ -3993,13 +4055,43 @@ function startApp() {
     desktop.onIgateStatus((payload) => {
       if (!igateWanted || payload.generation < igateGeneration) return;
       igateGeneration = payload.generation;
-      el("igate-status").textContent = payload.message;
+      igateSessionMessage = payload.message;
+      showIgateStatus();
       el("igate-counts").textContent =
         `${payload.forwarded} forwarded · ${payload.skipped} skipped`;
     }),
     desktop.onTncStatus((payload) => {
       if (!tncWanted || payload.generation < tncGeneration) return;
       tncGeneration = payload.generation;
+      const wasTncPaused = tncBeaconPaused;
+      tncBeaconPaused = payload.beacon_paused;
+      showIgateStatus();
+      if (tncBeaconPaused && beaconScheduleActive) {
+        if (mobileActive)
+          el("mobile-beacon-state").textContent =
+            "SmartBeaconing paused while the TNC reconnects.";
+        else
+          el("beacon-schedule-state").textContent =
+            "Beaconing paused while the TNC reconnects.";
+      } else if (wasTncPaused && !tncBeaconPaused && beaconScheduleActive) {
+        if (mobileActive)
+          el("mobile-beacon-state").textContent =
+            "TNC confirmed; SmartBeaconing will resume when due.";
+        else
+          el("beacon-schedule-state").textContent =
+            "TNC confirmed; automatic beaconing will resume when due.";
+      }
+      if (tncBeaconPaused && weatherBeaconActive) {
+        weatherBeaconPaused = true;
+        wxScheduleStatus.textContent =
+          "Weather beacon paused while the TNC reconnects.";
+        syncWeatherBeaconControls();
+      } else if (wasTncPaused && !tncBeaconPaused && weatherBeaconActive) {
+        weatherBeaconPaused = false;
+        wxScheduleStatus.textContent =
+          "TNC confirmed; weather beaconing will resume when due.";
+        syncWeatherBeaconControls();
+      }
       if (payload.state === "stopped" || payload.state === "power_cycle") {
         tncWanted = false;
         el<HTMLButtonElement>("tnc-connect").disabled = false;
@@ -4535,23 +4627,51 @@ function startApp() {
   const updateInstall = el<HTMLButtonElement>("install-update");
   const updateProgress = el<HTMLProgressElement>("update-progress");
   const updateDetailsText = el("update-download-details");
-  function updateIsBlocked() {
-    return updateBlocked({
+  const updateBlockerList = el("update-blockers");
+  let updateBlockerTimer: ReturnType<typeof setTimeout> | null = null;
+  function currentUpdateBlockers() {
+    return updateBlockers({
       positionBeacon: beaconScheduleActive,
       weatherBeacon: weatherBeaconActive,
+      igate: igateWanted,
       transmitting:
-        igateWanted ||
         beaconSending ||
         messageTransmissions > 0 ||
         outbox.some((item) => item.state === "sending"),
       weatherBusy: weatherBeaconBusy,
-      mapDownload:
-        activeMapDownload !== null ||
-        !el<HTMLButtonElement>("cancel-map-download").disabled,
+      mapDownload: mapDownloadBusy,
     });
+  }
+  function clearUpdateBlockers() {
+    if (updateBlockerTimer !== null) clearTimeout(updateBlockerTimer);
+    updateBlockerTimer = null;
+    updateBlockerList.hidden = true;
+    updateBlockerList.replaceChildren();
+  }
+  function showUpdateBlockers(): boolean {
+    clearUpdateBlockers();
+    const blockers = currentUpdateBlockers();
+    if (!blockers.length) {
+      updateStatus.textContent = downloadedUpdate
+        ? "Activity stopped. Select Install update to continue."
+        : "Activity stopped. Select Download and install to continue.";
+      return false;
+    }
+    updateStatus.textContent = downloadedUpdate
+      ? "Update downloaded. Waiting for these operations to stop:"
+      : "Before installing, finish these operations:";
+    for (const reason of blockers) {
+      const item = document.createElement("li");
+      item.textContent = reason;
+      updateBlockerList.append(item);
+    }
+    updateBlockerList.hidden = false;
+    updateBlockerTimer = setTimeout(showUpdateBlockers, 500);
+    return true;
   }
   async function checkForUpdates() {
     if (updateBusy) return;
+    clearUpdateBlockers();
     updateBusy = true;
     updateCheck.disabled = true;
     updateInstall.disabled = true;
@@ -4595,11 +4715,11 @@ function startApp() {
       }
       return;
     }
-    if (updateIsBlocked()) {
-      updateStatus.textContent =
-        "Stop the iGate and beaconing, and finish or cancel active transmissions and map downloads before updating.";
+    if (currentUpdateBlockers().length) {
+      showUpdateBlockers();
       return;
     }
+    clearUpdateBlockers();
     updateBusy = true;
     updateCheck.disabled = true;
     updateInstall.disabled = true;
@@ -4636,10 +4756,9 @@ function startApp() {
         );
         downloadedUpdate = true;
       }
-      if (updateIsBlocked()) {
-        updateStatus.textContent =
-          "Update downloaded. Stop the iGate and beaconing and finish active operations, then select Install update.";
+      if (currentUpdateBlockers().length) {
         updateInstall.textContent = "Install update";
+        showUpdateBlockers();
         return;
       }
       updateApplying = true;

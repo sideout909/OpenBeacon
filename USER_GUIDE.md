@@ -20,6 +20,10 @@ OpenBeacon checks GitHub for signed updates shortly after startup. When an updat
 
 The old portable beta does not include the updater; download and install an updater-enabled release once. The updater requires the Windows installer or Linux AppImage. A portable Linux executable can open the release page to download an AppImage instead. Checks require an internet connection and can be retried manually.
 
+If installation is blocked, the updater lists the remaining operations and refreshes the list as they finish. **Stop all beacons** prevents future scheduled sends; a send or weather read already in progress must finish before installation. Stop the iGate separately in **TNC → RF → APRS-IS iGate**. Receive-only APRS-IS, TNC and GPS connections can stay connected. A canceled map download remains busy until cancellation completes. Once the list clears, select the install button again; installation does not begin automatically.
+
+Older versions, including 0.2.4, show a generic stop-activity warning. If that warning persists after stopping activity and allowing in-progress operations to finish, close OpenBeacon and run the current Windows installer from the [release page](https://github.com/sideout909/OpenBeacon/releases/latest). Saved application data is stored separately from the program installation.
+
 ## Set up your station
 
 1. Open **My Station** and enter your amateur callsign and SSID, then choose a symbol. An RF path and beacon comment are optional. Save your settings.
@@ -62,6 +66,8 @@ The map plots stations with valid positions. Select a station for its details, d
 In **Beacon → Beacon settings**, choose APRS-IS or a supported RF TNC, then choose the **Fixed** or **GPS / Mobile** tab. An APRS-IS passcode is required for APRS-IS transmission and is saved in My Station. Check the station identity, location, symbol, comment and RF path before sending. In Fixed, **Set fixed location on map** saves a position selected by clicking the map. Use **Send once** or **Start auto** to begin the chosen schedule. Fixed mode uses the saved manual position if available; otherwise it captures the current GPS position when started and stops if the GPS fix becomes stale. Use GPS / Mobile mode for a moving station. The Beacon menu can start or stop an automatic schedule; its indicator is green when a schedule is active. **Stop all beacons** in the header stops both position and weather schedules. Stopping a schedule cannot recall a packet already handed to a TNC. Position and weather schedules always start stopped when OpenBeacon opens; start them again when desired. A radio or TNC may still transmit packets already queued or run its own beacon independently.
 
 For mobile SmartBeaconing, connect a GPS source in **GPS**, choose mobile mode in Beacon settings, review its speed, interval and turn settings, and start it. A fresh GPS fix with speed and course is required. The schedule stops if the fix becomes stale. The owner reports successful RF and APRS-IS beaconing. Mobile operation and additional hardware combinations need further real-hardware testing.
+
+While a TNC receiver is active, OpenBeacon watches for valid APRS RF packets. After five minutes without one, or if it detects GPS sentences instead of TNC data, it pauses the iGate and both RF and APRS-IS position and weather beacons, then retries the TNC connection about once a minute. A fresh valid APRS RF packet confirms recovery; opening a KISS port by itself cannot prove that the TNC is responding. A quiet channel can therefore leave beaconing paused until a packet is heard. Schedules remain active and resume when due after recovery. This does not stop a radio's own independent beacon or recall a packet already sent to it.
 
 ## Connect a GPS or phone
 

@@ -12,6 +12,12 @@ export function shouldShowWhatsNew(
 }
 
 const highlights: Record<string, string> = {
+  "0.2.7": `## TNC connection recovery
+- Detect missing APRS packets or unexpected GPS data and retry the TNC connection.
+- Pause iGate forwarding and position and weather beacons until a fresh APRS RF packet confirms recovery. A quiet channel can delay recovery.
+
+## Clearer update instructions
+- See which active operations need to finish or stop before an update can install.`,
   "0.2.6": `## Easier weather setup
 - Choose Weather Underground or Peet Bros and see just the settings for that source.
 - Review current readings, select APRS-IS or RF, and send once or start a weather schedule.

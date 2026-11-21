@@ -119,8 +119,11 @@ pub(crate) fn format_packet(packet: &DecodedPacket, call: &str) -> Option<Vec<u8
     (line.len() <= 512).then_some(line)
 }
 pub fn offer(app: &tauri::AppHandle, packets: &[DecodedPacket]) {
-    if let Ok(client) = app.state::<crate::aprs_session::AprsSession>().client(app) {
-        client.offer(packets);
+    if let (Ok(client), Ok(guard)) = (
+        app.state::<crate::aprs_session::AprsSession>().client(app),
+        app.state::<crate::tnc::Tnc>().beacon_guard(),
+    ) {
+        client.offer_with_guard(packets, Some(guard));
     }
 }
 #[tauri::command]

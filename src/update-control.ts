@@ -1,12 +1,42 @@
 /** Keep update installation away from active transmissions and map downloads. */
-export function updateBlocked(state: {
+export interface UpdateActivity {
   positionBeacon: boolean;
   weatherBeacon: boolean;
+  igate: boolean;
   transmitting: boolean;
   weatherBusy: boolean;
   mapDownload: boolean;
-}): boolean {
-  return Object.values(state).some(Boolean);
+}
+
+export function updateBlockers(state: UpdateActivity): string[] {
+  const blockers: string[] = [];
+  if (state.positionBeacon)
+    blockers.push(
+      "Stop automatic position beaconing (or use Stop all beacons).",
+    );
+  if (state.weatherBeacon)
+    blockers.push(
+      "Stop automatic weather beaconing (or use Stop all beacons).",
+    );
+  if (state.igate)
+    blockers.push(
+      "Stop the RF → APRS-IS iGate in TNC. Disconnecting the receiver or internet feed does not stop the iGate.",
+    );
+  if (state.transmitting)
+    blockers.push(
+      "Wait for the position or message send already in progress to finish. Stopping a schedule does not cancel a send already in progress.",
+    );
+  if (state.weatherBusy)
+    blockers.push("Wait for the weather read or send in progress to finish.");
+  if (state.mapDownload)
+    blockers.push(
+      "Wait for the map download to finish, or cancel it in Configure maps and wait for cancellation to complete.",
+    );
+  return blockers;
+}
+
+export function updateBlocked(state: UpdateActivity): boolean {
+  return updateBlockers(state).length > 0;
 }
 
 /** Use decimal MB to match the release download size shown by browsers. */

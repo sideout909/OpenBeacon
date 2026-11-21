@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::io::Write;
-use tauri::Manager;
+use tauri::{Manager, State};
 
 pub(crate) fn position(lat: f64, lon: f64, symbol: &str) -> Result<String, String> {
     if !lat.is_finite()
@@ -87,6 +87,22 @@ pub(crate) fn transmit(
             pass: Some(passcode.into()),
         },
         payload.into(),
+    )
+}
+pub(crate) fn transmit_beacon(
+    app: &tauri::AppHandle,
+    call: &str,
+    passcode: &str,
+    payload: &str,
+    guard: crate::tnc::TncGuard,
+) -> Result<String, String> {
+    crate::aprs_session::client(app)?.send_beacon(
+        crate::aprs_session::Credentials {
+            call: call.into(),
+            pass: Some(passcode.into()),
+        },
+        payload.into(),
+        guard,
     )
 }
 #[derive(Serialize, Deserialize)]
@@ -198,6 +214,7 @@ pub async fn clear_aprs_passcode(app: tauri::AppHandle) -> Result<(), String> {
 #[allow(clippy::too_many_arguments)]
 pub async fn send_position_beacon(
     app: tauri::AppHandle,
+    tnc: State<'_, crate::tnc::Tnc>,
     callsign: String,
     lat: f64,
     lon: f64,
@@ -206,6 +223,7 @@ pub async fn send_position_beacon(
     speed_knots: Option<f64>,
     course: Option<f64>,
 ) -> Result<String, String> {
+    let guard = tnc.beacon_guard()?;
     let call = callsign.trim().to_ascii_uppercase();
     let mut parts = call.split('-');
     let base = parts.next().unwrap_or("");
@@ -222,9 +240,11 @@ pub async fn send_position_beacon(
         return Err("Enter a valid APRS-IS passcode".into());
     }
     let payload = position_payload(lat, lon, &symbol, &comment, speed_knots, course)?;
-    tauri::async_runtime::spawn_blocking(move || transmit(&app, &call, &passcode, &payload))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        transmit_beacon(&app, &call, &passcode, &payload, guard)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[cfg(test)]
 mod tests {

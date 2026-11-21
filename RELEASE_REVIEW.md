@@ -2,6 +2,12 @@
 
 OpenBeacon is a stable application in use by the owner and other operators, who report that it is running well. This record distinguishes reported operating experience from automated checks and tracks areas needing further coverage. See [USER_GUIDE.md](USER_GUIDE.md) for operation and [ROADMAP.md](ROADMAP.md) for follow-up work.
 
+## Unreleased updater diagnostics
+
+The updater now identifies every operation blocking installation and refreshes that list until the operations finish. Stopped schedules can still have an in-progress weather read or send; disconnecting receive-only connections is not required. Map-download activity is tracked through completion, cancellation and final validation rather than inferred from the Cancel button's enabled state.
+
+A browser reproduction using the 0.2.4 frontend and a mocked desktop boundary confirmed that stopping all schedules and connections while a weather read is pending produces the old generic warning, and that installation succeeds after the read settles. This is a possible explanation for the owner's Windows 0.2.4-to-0.2.6 report, not a confirmed diagnosis of that installation. The owner completed the upgrade using the Windows installer. Checks of the revised frontend cover idle installation, a weather operation settling after Stop all beacons, pending map cancellation, and an operation starting during update download; installation remains blocked until the operation finishes, with the downloaded payload retained for retry.
+
 ## Version 0.2.6 changes and verification
 
 The weather station setup now groups the selected source, observation, transmission route and automatic schedule, with a shared text-size scale for both sources. Switching sources clears the displayed observation, and source controls stay locked during a read or active schedule. Existing source, RF route, path and interval settings are retained.

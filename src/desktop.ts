@@ -126,6 +126,7 @@ export const desktop = {
       message: string;
       received: number;
       errors: number;
+      beacon_paused: boolean;
     }) => void,
   ) =>
     listen("tnc-status", (event) =>
@@ -136,6 +137,7 @@ export const desktop = {
           message: string;
           received: number;
           errors: number;
+          beacon_paused: boolean;
         },
       ),
     ),
